@@ -2,20 +2,23 @@
 include 'auth.php';
 include 'config.php';
 
-// Security headers (opsional tapi bagus)
+// Security headers
 header("X-Content-Type-Options: nosniff");
 header("X-Frame-Options: SAMEORIGIN");
 header("X-XSS-Protection: 1; mode=block");
 
 // Amankan session
-$user_id = isset($_SESSION['user_id']) ? (int) $_SESSION['user_id'] : null;
+$user_id = isset($_SESSION['user_id']) ? (int) $_SESSION['user_id'] : 0;
 
-if (!$user_id) {
+if ($user_id <= 0) {
     die('Terjadi kesalahan. Silakan login kembali.');
 }
 
 // ====================== QUERY 1 ======================
-$current_month_spending_query = "
+$current_month_spending = [];
+$all_categories = [];
+
+$stmt = mysqli_prepare($conn, "
     SELECT c.name AS category_name,
         SUM(CASE
             WHEN s.payment_method = 'Monthly' THEN a.monthly_price
@@ -27,26 +30,33 @@ $current_month_spending_query = "
     JOIN categories c ON a.category_id = c.id
     WHERE s.user_id = ? AND s.status = 'Active'
     GROUP BY category_name;
-";
+");
 
-$stmt = mysqli_prepare($conn, $current_month_spending_query);
-if (!$stmt) {
+if ($stmt) {
+    mysqli_stmt_bind_param($stmt, "i", $user_id);
+
+    if (mysqli_stmt_execute($stmt)) {
+        $result = mysqli_stmt_get_result($stmt);
+
+        if ($result) {
+            while ($row = mysqli_fetch_assoc($result)) {
+                $cat = $row['category_name'] ?? '';
+                $cost = isset($row['estimated_monthly_cost']) ? (float)$row['estimated_monthly_cost'] : 0;
+
+                if ($cat !== '') {
+                    $current_month_spending[$cat] = $cost;
+                    $all_categories[] = $cat;
+                }
+            }
+        }
+    } else {
+        error_log(mysqli_stmt_error($stmt));
+    }
+
+    mysqli_stmt_close($stmt);
+} else {
     error_log(mysqli_error($conn));
-    die('Terjadi kesalahan pada sistem.');
 }
-
-mysqli_stmt_bind_param($stmt, "i", $user_id);
-mysqli_stmt_execute($stmt);
-$result = mysqli_stmt_get_result($stmt);
-
-$current_month_spending = [];
-$all_categories = [];
-
-while ($row = mysqli_fetch_assoc($result)) {
-    $current_month_spending[$row['category_name']] = (float)$row['estimated_monthly_cost'];
-    $all_categories[] = $row['category_name'];
-}
-mysqli_stmt_close($stmt);
 
 // ====================== DUMMY DATA ======================
 $num_months = 6;
@@ -59,14 +69,17 @@ for ($i = $num_months - 1; $i >= 0; $i--) {
 
     foreach ($all_categories as $cat) {
         $monthly_category_spending[$cat][$month] =
-            ($i == 0)
+            ($i === 0)
             ? ($current_month_spending[$cat] ?? 0)
             : max(0, rand(5, 50));
     }
 }
 
 // ====================== QUERY PIE ======================
-$app_distribution_query = "
+$pie_chart_labels = [];
+$pie_chart_data = [];
+
+$stmt = mysqli_prepare($conn, "
     SELECT c.name AS category_name,
            SUM(ut.hours_used) AS total_hours_used
     FROM usage_tracking ut
@@ -75,43 +88,50 @@ $app_distribution_query = "
     JOIN categories c ON a.category_id = c.id
     WHERE s.user_id = ?
     GROUP BY category_name;
-";
+");
 
-$stmt = mysqli_prepare($conn, $app_distribution_query);
-if (!$stmt) {
+if ($stmt) {
+    mysqli_stmt_bind_param($stmt, "i", $user_id);
+
+    if (mysqli_stmt_execute($stmt)) {
+        $result = mysqli_stmt_get_result($stmt);
+
+        if ($result) {
+            while ($row = mysqli_fetch_assoc($result)) {
+                $pie_chart_labels[] = $row['category_name'] ?? '';
+                $pie_chart_data[] = isset($row['total_hours_used']) ? (float)$row['total_hours_used'] : 0;
+            }
+        }
+    } else {
+        error_log(mysqli_stmt_error($stmt));
+    }
+
+    mysqli_stmt_close($stmt);
+} else {
     error_log(mysqli_error($conn));
-    die('Terjadi kesalahan.');
 }
 
-mysqli_stmt_bind_param($stmt, "i", $user_id);
-mysqli_stmt_execute($stmt);
-$result = mysqli_stmt_get_result($stmt);
+// ====================== ALL APPS ======================
+$all_apps_result = null;
 
-$pie_chart_labels = [];
-$pie_chart_data = [];
-
-while ($row = mysqli_fetch_assoc($result)) {
-    $pie_chart_labels[] = $row['category_name'];
-    $pie_chart_data[] = (float)$row['total_hours_used'];
-}
-mysqli_stmt_close($stmt);
-
-// ====================== ALL APPS (FIXED) ======================
-$all_apps_query = "
+$stmt = mysqli_prepare($conn, "
     SELECT a.name AS app_name, c.name AS category_name,
            a.monthly_price, a.yearly_price
     FROM apps a
     JOIN categories c ON a.category_id = c.id;
-";
+");
 
-$stmt = mysqli_prepare($conn, $all_apps_query);
-if (!$stmt) {
+if ($stmt) {
+    if (mysqli_stmt_execute($stmt)) {
+        $all_apps_result = mysqli_stmt_get_result($stmt);
+    } else {
+        error_log(mysqli_stmt_error($stmt));
+    }
+
+    mysqli_stmt_close($stmt);
+} else {
     error_log(mysqli_error($conn));
-    die('Terjadi kesalahan.');
 }
-
-mysqli_stmt_execute($stmt);
-$all_apps_result = mysqli_stmt_get_result($stmt);
 
 // ====================== GEMINI ======================
 $gemini_api_key = getenv('GEMINI_API_KEY');
@@ -138,13 +158,17 @@ function callGeminiAPI($api_key, $prompt) {
     ]);
 
     $response = curl_exec($curl);
+    $http_code = curl_getinfo($curl, CURLINFO_HTTP_CODE);
 
-    if (!$response) {
-        return ['success' => false, 'error' => 'API tidak merespon'];
+    if ($response === false || $http_code !== 200) {
+        curl_close($curl);
+        return ['success' => false, 'error' => 'API gagal'];
     }
 
     $decoded = json_decode($response, true);
+
     if (json_last_error() !== JSON_ERROR_NONE) {
+        curl_close($curl);
         return ['success' => false, 'error' => 'JSON invalid'];
     }
 
@@ -156,30 +180,31 @@ function callGeminiAPI($api_key, $prompt) {
     ];
 }
 
-// ====================== OUTPUT CLEANER ======================
+// ====================== CLEAN OUTPUT ======================
 function cleanGeminiOutput($text) {
-    $text = htmlspecialchars($text);
-    $text = str_replace(['**', '*', '#'], '', $text);
-    return nl2br($text);
+    $safe = htmlspecialchars($text ?? '');
+    $safe = str_replace(['**', '*', '#'], '', $safe);
+    return nl2br($safe);
 }
 
 // ====================== CALL AI ======================
-$general_insight = "";
-if (!empty($gemini_api_key)) {
-    $result = callGeminiAPI($gemini_api_key, "Analyze my subscriptions");
+$general_insight = "Tidak ada insight.";
 
-    if ($result['success']) {
-        $general_insight = cleanGeminiOutput($result['text']);
+if (!empty($gemini_api_key)) {
+    $ai = callGeminiAPI($gemini_api_key, "Analyze my subscriptions");
+
+    if ($ai['success'] && !empty($ai['text'])) {
+        $general_insight = cleanGeminiOutput($ai['text']);
     } else {
-        error_log($result['error']);
-        $general_insight = "AI tidak tersedia saat ini.";
+        error_log($ai['error'] ?? 'Unknown AI error');
     }
 }
-
 ?>
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FinSub</title>
 </head>
 <body>
