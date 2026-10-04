@@ -32,14 +32,14 @@ FinSub adalah aplikasi web berbasis PHP untuk membantu Anda memantau, mengelola,
 
 ### 1. Clone / Download Project
 
-`ash
-git clone https://github.com/your-username/finsub.git
-`
+```bash
+git clone https://github.com/glacie21/fnsub.git
+```
 
 ### 2. Konfigurasi Database
 
 - Buka phpMyAdmin atau MySQL client Anda
-- Import file `finsub/database.sql` untuk membuat database dan mengisi data awal
+- Import file `database.sql` untuk membuat database dan mengisi data awal
 - Pastikan nama database yang dipakai adalah `finsub`
 
 ### 3. Konfigurasi Koneksi Database
@@ -57,45 +57,45 @@ Koneksi database dibaca dari **environment variable**. Atur variabel berikut di 
 
 ### 4. Jalankan dengan Web Server
 
-- Letakkan folder `finsub/` di dalam `htdocs` (XAMPP) atau `www` (WAMP/Laragon)
-- Akses melalui browser: `http://localhost/finsub/`
+- Letakkan folder project (misalnya `fnsub/`) di dalam `htdocs` (XAMPP) atau `www` (WAMP/Laragon)
+- Akses melalui browser menggunakan nama folder tersebut, misalnya `http://localhost/fnsub/`
 
 ---
 
 ## Struktur Folder
 
-`
-finsub-main/
-├── finsub/
-│   ├── assets/
-│   │   └── icons/              # Icon aplikasi (Netflix, Spotify, dll.)
-│   ├── css/
-│   │   └── style.css           # CSS tambahan
-│   ├── templates/
-│   │   ├── navbar.php          # Navbar + notifikasi
-│   │   ├── header.php          # Header HTML
-│   │   └── footer.php          # Footer HTML
-│   ├── auth.php                # Guard session
-│   ├── config.php              # Koneksi database
-│   ├── database.sql            # Skema & data awal database
-│   ├── login.php               # Halaman login
-│   ├── register.php            # Halaman registrasi
-│   ├── logout.php              # Proses logout
-│   ├── homepage.php            # Landing page
-│   ├── dashboard.php           # Dashboard ringkasan
-│   ├── index.php               # Daftar & kelola langganan
-│   ├── add_subscription.php    # Tambah langganan (standalone)
-│   ├── edit_subscription.php   # Edit langganan (standalone)
-│   ├── delete_subscription.php # Hapus langganan
-│   ├── detail_subscription.php # Detail + usage tracking
-│   ├── update_subscription.php # Update via JSON API
-│   ├── set_inactive.php        # Set langganan menjadi Inactive
-│   ├── insight.php             # Halaman insight & grafik
-│   ├── profile.php             # Halaman profil pengguna
-│   ├── update_profile.php      # Proses update profil
-│   └── landingpage.php         # (Alternatif landing page)
+```text
+fnsub/
+├── assets/
+│   └── icons/                  # Icon aplikasi (Netflix, Spotify, dll.)
+├── css/
+│   └── style.css               # CSS tambahan
+├── templates/
+│   ├── navbar.php              # Navbar + notifikasi
+│   ├── header.php              # Header HTML
+│   └── footer.php              # Footer HTML
+├── add_subscription.php        # Tambah langganan
+├── auth.php                    # Guard session
+├── config.php                  # Koneksi database
+├── dashboard.php               # Dashboard ringkasan
+├── database.sql                # Skema & data awal database
+├── delete_subscription.php     # Hapus langganan
+├── detail_subscription.php     # Detail + usage tracking
+├── edit_subscription.php       # Edit langganan
+├── homepage.php                # Landing page
+├── index.php                   # Daftar & kelola langganan
+├── insight.php                 # Halaman insight & grafik
+├── landingpage.php             # Alternatif landing page
+├── login.php                   # Halaman login
+├── logout.php                  # Proses logout
+├── profile.php                 # Halaman profil pengguna
+├── register.php                # Halaman registrasi
+├── set_inactive.php            # Set langganan menjadi Inactive
+├── set_reminder.php            # Atur pengingat langganan
+├── update_profile.php          # Proses update profil
+├── update_subscription.php     # Update via JSON API
 └── README.md
-`
+```
 
 ---
 
@@ -143,7 +143,7 @@ INSERT INTO apps (name, available_cycles, monthly_price, yearly_price, category_
 VALUES ('Instagram', 'Monthly', 4.99, NULL, (SELECT id FROM categories WHERE name = 'Social Media'));
 `
 
-Kemudian tambahkan icon berformat `.png` di folder `finsub/assets/icons/` dengan nama file menggunakan **huruf kecil tanpa spasi** (contoh: `instagram.png`).
+Kemudian tambahkan icon berformat `.png` di folder `assets/icons/` dengan nama file menggunakan **huruf kecil tanpa spasi** (contoh: `instagram.png`).
 
 ---
 
