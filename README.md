@@ -64,7 +64,6 @@ Koneksi database dibaca dari **environment variable**. Atur variabel berikut di 
 
 ## Struktur Folder
 
-```text
 fnsub/
 ├── assets/
 │   └── icons/                  # Icon aplikasi (Netflix, Spotify, dll.)

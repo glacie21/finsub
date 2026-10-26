@@ -1,8 +1,10 @@
 <?php
+include 'auth.php';
 include 'config.php';
 include 'templates/navbar.php';
 
 $id = $_GET['id'] ?? null;
+$user_id = (int) $_SESSION['user_id'];
 
 if (!$id) {
     echo "<script>alert('No subscription selected'); window.location='index.php';</script>";
@@ -11,12 +13,12 @@ if (!$id) {
 
 // Query subscription dan app terkait
 $stmt = mysqli_prepare($conn, "
-  SELECT subscriptions.*, apps.name, apps.billing_cycle, apps.available_cycles 
+  SELECT subscriptions.*, apps.name, apps.available_cycles 
   FROM subscriptions 
   JOIN apps ON subscriptions.app_id = apps.id 
-  WHERE subscriptions.id = ?
+  WHERE subscriptions.id = ? AND subscriptions.user_id = ?
 ");
-mysqli_stmt_bind_param($stmt, "i", $id);
+mysqli_stmt_bind_param($stmt, "ii", $id, $user_id);
 mysqli_stmt_execute($stmt);
 $result = mysqli_stmt_get_result($stmt);
 $data = mysqli_fetch_assoc($result);
@@ -40,10 +42,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     } else {
         $update_stmt = mysqli_prepare($conn, "
           UPDATE subscriptions 
-          SET next_payment_date = ?, payment_method = ? 
-          WHERE id = ?
+          SET next_payment_date = ?, billing_cycle = ? 
+          WHERE id = ? AND user_id = ?
         ");
-        mysqli_stmt_bind_param($update_stmt, "ssi", $next_payment_date, $billing_cycle, $id);
+        mysqli_stmt_bind_param($update_stmt, "ssii", $next_payment_date, $billing_cycle, $id, $user_id);
         $exec = mysqli_stmt_execute($update_stmt);
 
         if ($exec) {
@@ -86,7 +88,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
               <?= in_array('Monthly', $available_cycles) ? 'cursor-pointer hover:bg-gray-50' : 'bg-gray-200 cursor-not-allowed' ?>">
               <input type="radio" name="billing_cycle" value="Monthly"
                 <?= (in_array('Monthly', $available_cycles)) ? '' : 'disabled' ?>
-                <?= ($data['payment_method'] == 'Monthly') ? 'checked' : '' ?>>
+                <?= ($data['billing_cycle'] == 'Monthly') ? 'checked' : '' ?>>
               <span>Monthly</span>
             </label>
 
@@ -95,7 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
               <?= in_array('Yearly', $available_cycles) ? 'cursor-pointer hover:bg-gray-50' : 'bg-gray-200 cursor-not-allowed' ?>">
               <input type="radio" name="billing_cycle" value="Yearly"
                 <?= (in_array('Yearly', $available_cycles)) ? '' : 'disabled' ?>
-                <?= ($data['payment_method'] == 'Yearly') ? 'checked' : '' ?>>
+                <?= ($data['billing_cycle'] == 'Yearly') ? 'checked' : '' ?>>
               <span>Yearly</span>
             </label>
           </div>

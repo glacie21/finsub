@@ -4,6 +4,7 @@
 
 include 'config.php';
 include 'auth.php';
+include 'functions.php';
 // Make sure the session is started to get the user_id
 if (session_status() == PHP_SESSION_NONE) {
     session_start();
@@ -25,7 +26,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['usage_hours'], $_POST[
 
     $subscription_id = (int)$_POST['subscription_id'];
     $usage_hours = (float)$_POST['usage_hours'];
-    $usage_date = date('Y-m-d'); // Keep this as current date, but unique key handles monthly
+    // Simpan sebagai tanggal 1 bulan ini agar unique key (subscription_id, user_id, usage_date)
+    // menjadi satu baris per bulan dan update berikutnya menimpa nilai bulan yang sama
+    $usage_date = date('Y-m-01');
 
     // Debug: Check if we receive the data correctly
     error_log("DEBUG: Received usage data - subscription_id: $subscription_id, user_id: $user_id, usage_hours: $usage_hours, usage_date: $usage_date");
@@ -150,14 +153,38 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['edit_id'], $_POST['edi
         ? date('Y-m-d', strtotime($edit_start_date_str . " +30 days"))
         : date('Y-m-d', strtotime($edit_start_date_str . " +1 year"));
 
-    // Update the database
-    $stmt_update = mysqli_prepare($conn, "UPDATE subscriptions SET payment_method = ?, next_payment_date = ?, user_monthly_price = ?, user_yearly_price = ? WHERE id = ? AND user_id = ?");
+    // Ambil status dan harga saat ini untuk mengetahui apakah langganan sedang diaktifkan kembali
+    $stmt_current = mysqli_prepare($conn, "
+        SELECT s.status, s.app_id, a.monthly_price, a.yearly_price
+        FROM subscriptions s
+        JOIN apps a ON s.app_id = a.id
+        WHERE s.id = ? AND s.user_id = ?
+    ");
+    mysqli_stmt_bind_param($stmt_current, "ii", $edit_id, $user_id);
+    mysqli_stmt_execute($stmt_current);
+    $current_sub = mysqli_fetch_assoc(mysqli_stmt_get_result($stmt_current));
+    mysqli_stmt_close($stmt_current);
+
+    if (!$current_sub) {
+        header('Location: dashboard.php');
+        exit;
+    }
+
+    // Update the database (edit selalu mengaktifkan langganan, sama seperti di index.php)
+    $stmt_update = mysqli_prepare($conn, "UPDATE subscriptions SET billing_cycle = ?, next_payment_date = ?, status = 'Active', user_monthly_price = ?, user_yearly_price = ? WHERE id = ? AND user_id = ?");
     if ($stmt_update) {
         mysqli_stmt_bind_param($stmt_update, "ssddii", $edit_billing_cycle, $next_payment_date, $user_monthly_price, $user_yearly_price, $edit_id, $user_id);
         if (!mysqli_stmt_execute($stmt_update)) {
             error_log('Subscription Update Error: ' . mysqli_stmt_error($stmt_update));
             $_SESSION['error_message'] = 'Failed to update subscription.';
         } else {
+            // Langganan Inactive yang diaktifkan kembali: catat pembayaran pada tanggal mulai baru
+            if ($current_sub['status'] == 'Inactive') {
+                $amount_to_log = subscription_price($edit_billing_cycle, $user_monthly_price, $user_yearly_price, $current_sub['monthly_price'], $current_sub['yearly_price']);
+                if ($amount_to_log > 0) {
+                    log_spending($conn, $user_id, $edit_id, $current_sub['app_id'], $amount_to_log, $edit_start_date_str, "Subscription reactivated (" . $edit_billing_cycle . ")");
+                }
+            }
             $_SESSION['success_message'] = 'Subscription updated successfully!';
         }
         mysqli_stmt_close($stmt_update);
@@ -171,6 +198,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['edit_id'], $_POST['edi
     exit;
 }
 
+
+// Perpanjang otomatis langganan yang sudah jatuh tempo sebelum menampilkan data
+renew_due_subscriptions($conn, $user_id);
 
 // --- Fetch Subscription Data to Display ---
 $id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
@@ -234,8 +264,8 @@ if ($stmt_current_month) {
 }
 
 // Fetch usage data for the previous month (for comparison)
-$previous_month_year = date('Y', strtotime('-1 month'));
-$previous_month = date('m', strtotime('-1 month'));
+$previous_month_year = date('Y', strtotime(date('Y-m-01') . ' -1 month'));
+$previous_month = date('m', strtotime(date('Y-m-01') . ' -1 month'));
 
 $previous_month_usage_hours = 0;
 $has_previous_month_real_data = false;
@@ -251,13 +281,8 @@ if ($stmt_previous_month) {
     if ($row = mysqli_fetch_assoc($result_previous_month)) {
         $previous_month_usage_hours = $row['hours_used'];
         $has_previous_month_real_data = true;
-    } else {
-        // DUMMY DATA for previous month if no real data is found
-        $previous_month_usage_hours = round(rand(10, 60) + (rand(0, 9) / 10), 1);
     }
     mysqli_stmt_close($stmt_previous_month);
-} else {
-    $previous_month_usage_hours = round(rand(10, 60) + (rand(0, 9) / 10), 1);
 }
 
 
@@ -286,25 +311,15 @@ if ($stmt_historical_usage) {
     mysqli_stmt_close($stmt_historical_usage);
 }
 
-// Populate chart data, filling in zeros for missing months and adding specific dummy data
+// Populate chart data, filling in zeros for months without recorded usage
 for ($i = $num_months - 1; $i >= 0; $i--) {
-    $date_obj = strtotime("-$i month");
+    // Pakai tanggal 1 agar "-N month" tidak meloncati bulan pendek (mis. 31 Mar - 1 bulan)
+    $date_obj = strtotime(date('Y-m-01') . " -$i month");
     $month_label = date('M Y', $date_obj);
     $month_key = date('Y-m', $date_obj);
 
     $chart_labels[] = $month_label;
-
-    // --- Tambahkan logika dummy data di sini ---
-    // Contoh: Jika bulan adalah April 2025, set 24 jam.
-    if ($month_key === '2025-04') { // Sesuaikan tahun jika perlu
-        $chart_data[] = 24.0; // Dummy data: 24 hours for April 2025
-    } elseif (isset($monthly_usage_raw[$month_key])) {
-        $chart_data[] = $monthly_usage_raw[$month_key];
-    } else {
-        // Jika tidak ada data di DB dan bukan bulan dummy yang spesifik, gunakan dummy acak
-        $chart_data[] = round(rand(10, 60) + (rand(0, 9) / 10), 1);
-    }
-    // --- Akhir logika dummy data ---
+    $chart_data[] = $monthly_usage_raw[$month_key] ?? 0;
 }
 
 
@@ -314,9 +329,9 @@ for ($i = $num_months - 1; $i >= 0; $i--) {
 // Determine the correct price based on the payment method
 // PRIORITIZE: Use user-defined price if available, otherwise fallback to app's default price
 $current_price = 0;
-if ($data['payment_method'] == 'Monthly') {
+if ($data['billing_cycle'] == 'Monthly') {
     $current_price = ($data['user_monthly_price'] !== NULL) ? $data['user_monthly_price'] : $data['default_monthly_price'];
-} elseif ($data['payment_method'] == 'Yearly') {
+} elseif ($data['billing_cycle'] == 'Yearly') {
     $current_price = ($data['user_yearly_price'] !== NULL) ? $data['user_yearly_price'] : $data['default_yearly_price'];
 }
 
@@ -404,7 +419,7 @@ if ($has_this_month_usage) {
                 </div>
                 <div>
                     <p class="text-gray-500">Billing Cycle</p>
-                    <p class="font-medium" id="currentBillingCycle"><?= htmlspecialchars($data['payment_method']) ?></p>
+                    <p class="font-medium" id="currentBillingCycle"><?= htmlspecialchars($data['billing_cycle']) ?></p>
                 </div>
                 <div>
                     <p class="text-gray-500">Next Payment Date</p>
@@ -424,7 +439,7 @@ if ($has_this_month_usage) {
                 <button onclick="openEditModal(
                     '<?= $data['id'] ?>',
                     '<?= htmlspecialchars($data['app_name']) ?>',
-                    '<?= htmlspecialchars($data['payment_method']) ?>',
+                    '<?= htmlspecialchars($data['billing_cycle']) ?>',
                     '<?= htmlspecialchars($data['next_payment_date']) ?>',
                     '<?= htmlspecialchars($data['user_monthly_price'] ?? '') ?>',
                     '<?= htmlspecialchars($data['user_yearly_price'] ?? '') ?>'
@@ -432,9 +447,20 @@ if ($has_this_month_usage) {
                         class="bg-blue-600 text-white px-5 py-2 rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors duration-200 shadow-md">
                     Edit Subscription
                 </button>
-                <a href="delete_subscription.php?id=<?= $data['id'] ?>" onclick="return confirm('Are you sure you want to delete this subscription?')" class="bg-red-600 text-white px-5 py-2 rounded-lg hover:bg-red-700 text-sm font-medium transition-colors duration-200 shadow-md">
-                    Delete Subscription
-                </a>
+                <?php if ($data['status'] == 'Active'): ?>
+                <form action="set_inactive.php" method="POST" onsubmit="return confirm('Stop this subscription? It will no longer renew automatically. You can reactivate it later via Edit.')">
+                    <input type="hidden" name="id" value="<?= $data['id'] ?>">
+                    <button type="submit" class="bg-gray-600 text-white px-5 py-2 rounded-lg hover:bg-gray-700 text-sm font-medium transition-colors duration-200 shadow-md">
+                        Stop Subscription
+                    </button>
+                </form>
+                <?php endif; ?>
+                <form action="delete_subscription.php" method="POST" onsubmit="return confirm('Are you sure you want to delete this subscription?')">
+                    <input type="hidden" name="id" value="<?= $data['id'] ?>">
+                    <button type="submit" class="bg-red-600 text-white px-5 py-2 rounded-lg hover:bg-red-700 text-sm font-medium transition-colors duration-200 shadow-md">
+                        Delete Subscription
+                    </button>
+                </form>
                 <?php if (!$this_month_usage_hours): // Check if current month has any recorded usage ?>
                 <button onclick="openUsageModal()"
                         class="bg-green-600 text-white px-5 py-2 rounded-lg hover:bg-green-700 text-sm font-medium transition-colors duration-200 shadow-md">
@@ -461,10 +487,10 @@ if ($has_this_month_usage) {
                     <p class="text-xs <?= $usage_comparison_class ?>"><?= $usage_comparison_text ?></p>
                 </div>
                 <div class="text-center p-3 bg-gray-50 rounded-lg">
-                    <p class="text-gray-500">Previous Month (<?= date('M Y', strtotime('-1 month')) ?>)</p>
+                    <p class="text-gray-500">Previous Month (<?= date('M Y', strtotime(date('Y-m-01') . ' -1 month')) ?>)</p>
                     <p class="font-bold text-lg"><?= number_format($previous_month_usage_hours, 1) ?>h</p>
                     <?php if (!$has_previous_month_real_data): ?>
-                        <p class="text-xs text-gray-500">(Dummy Data)</p>
+                        <p class="text-xs text-gray-500">(No usage recorded)</p>
                     <?php endif; ?>
                 </div>
                 <div class="text-center p-3 bg-gray-50 rounded-lg">
@@ -485,7 +511,7 @@ if ($has_this_month_usage) {
                   if (!empty($similar_apps)) {
                     foreach ($similar_apps as $s_app) {
                       // Determine the price for similar apps based on the *current* subscription's payment method
-                      $s_price = ($data['payment_method'] == 'Monthly') ? $s_app['monthly_price'] : $s_app['yearly_price'];
+                      $s_price = ($data['billing_cycle'] == 'Monthly') ? $s_app['monthly_price'] : $s_app['yearly_price'];
                       $diff = $s_price - $current_price;
                       $diffPercent = ($current_price != 0) ? ($diff / $current_price) * 100 : 0;
                 ?>
@@ -497,7 +523,7 @@ if ($has_this_month_usage) {
                                  class="w-10 h-10 rounded-md border border-gray-200 p-1">
                             <div>
                                 <p class="font-semibold text-gray-900"><?= htmlspecialchars($s_app['name']) ?></p>
-                                <p class="text-sm text-gray-500">Price: $<?= number_format($s_price, 2) ?>/<?= htmlspecialchars($data['payment_method']) ?></p>
+                                <p class="text-sm text-gray-500">Price: $<?= number_format($s_price, 2) ?>/<?= htmlspecialchars($data['billing_cycle']) ?></p>
                             </div>
                         </div>
                         <p class="text-sm text-gray-600">

@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   app_id INT,
   next_payment_date DATE,
   status ENUM('Active','Inactive'),
-  payment_method ENUM('Monthly','Yearly'),
+  billing_cycle ENUM('Monthly','Yearly'),
   FOREIGN KEY (app_id) REFERENCES apps(id)
 );
 
@@ -101,6 +101,11 @@ FOREIGN KEY (user_id) REFERENCES users(id);
 ALTER TABLE subscriptions
 ADD COLUMN user_monthly_price DECIMAL(10,2) NULL,
 ADD COLUMN user_yearly_price DECIMAL(10,2) NULL;
+
+-- Pengaturan pengingat per langganan (dipakai set_reminder.php dan notifikasi navbar)
+ALTER TABLE subscriptions
+ADD COLUMN reminder_enabled TINYINT(1) NOT NULL DEFAULT 1,
+ADD COLUMN reminder_days_before INT NOT NULL DEFAULT 30;
 
 -- New table for tracking spending logs
 CREATE TABLE IF NOT EXISTS spending_logs (

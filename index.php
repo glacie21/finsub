@@ -1,46 +1,10 @@
 <?php
 include 'auth.php'; // Includes session_start() and authentication check
 include 'config.php'; // Includes database connection
+include 'functions.php';
 
-// --- START: Logika Otomatis untuk Mengatur Langganan Inactive dan Mencatat Pengeluaran ---
-// Cek dan catat pengeluaran untuk langganan yang akan berakhir atau sudah berakhir
-$current_date = date('Y-m-d');
-// MODIFIED: Select user-defined prices from subscriptions table
-$stmt_check_due = mysqli_prepare($conn, "SELECT s.id, s.app_id, s.next_payment_date, s.payment_method, s.user_id, s.user_monthly_price, s.user_yearly_price, a.monthly_price AS default_monthly_price, a.yearly_price AS default_yearly_price FROM subscriptions s JOIN apps a ON s.app_id = a.id WHERE s.next_payment_date <= ? AND s.status = 'Active'");
-if ($stmt_check_due) {
-    mysqli_stmt_bind_param($stmt_check_due, "s", $current_date);
-    mysqli_stmt_execute($stmt_check_due);
-    $result_due_subs = mysqli_stmt_get_result($stmt_check_due);
-
-    while ($due_sub = mysqli_fetch_assoc($result_due_subs)) {
-        $amount = 0;
-        // PRIORITIZE: Use user-defined price if available, otherwise fallback to app's default price
-        if ($due_sub['payment_method'] == 'Monthly') {
-            $amount = ($due_sub['user_monthly_price'] !== NULL) ? $due_sub['user_monthly_price'] : $due_sub['default_monthly_price'];
-        } elseif ($due_sub['payment_method'] == 'Yearly') {
-            $amount = ($due_sub['user_yearly_price'] !== NULL) ? $due_sub['user_yearly_price'] : $due_sub['default_yearly_price'];
-        }
-
-        if ($amount > 0) {
-            // Catat pengeluaran ke spending_logs
-            $log_stmt = mysqli_prepare($conn, "INSERT INTO spending_logs (user_id, subscription_id, app_id, amount, transaction_date, description) VALUES (?, ?, ?, ?, ?, ?)");
-            $description = "Automatic charge for " . htmlspecialchars($due_sub['payment_method']) . " subscription.";
-            mysqli_stmt_bind_param($log_stmt, "iiisss", $due_sub['user_id'], $due_sub['id'], $due_sub['app_id'], $amount, $due_sub['next_payment_date'], $description);
-            mysqli_stmt_execute($log_stmt);
-            mysqli_stmt_close($log_stmt);
-        }
-
-        // Perbarui status langganan menjadi 'Inactive'
-        $update_status_stmt = mysqli_prepare($conn, "UPDATE subscriptions SET status = 'Inactive' WHERE id = ?");
-        mysqli_stmt_bind_param($update_status_stmt, "i", $due_sub['id']);
-        mysqli_stmt_execute($update_status_stmt);
-        mysqli_stmt_close($update_status_stmt);
-    }
-    mysqli_stmt_close($stmt_check_due);
-} else {
-    error_log("Error in auto-inactivate prepare statement: " . mysqli_error($conn));
-}
-// --- END: Logika Otomatis untuk Mengatur Langganan Inactive dan Mencatat Pengeluaran ---
+// Perpanjang otomatis langganan milik user ini yang sudah jatuh tempo dan catat tagihannya
+renew_due_subscriptions($conn, $_SESSION['user_id']);
 
 // Get filter from URL
 $filter = isset($_GET['filter']) ? $_GET['filter'] : 'All';
@@ -68,8 +32,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['edit_id'], $_POST['edi
         die('Invalid start date format');
     }
 
-    // Ambil data langganan yang ada untuk mendapatkan app_id dan payment_method sebelumnya
-    $current_sub_stmt = mysqli_prepare($conn, "SELECT app_id, payment_method FROM subscriptions WHERE id = ? AND user_id = ?");
+    // Ambil data langganan yang ada untuk mendapatkan app_id dan billing_cycle sebelumnya
+    $current_sub_stmt = mysqli_prepare($conn, "SELECT app_id, billing_cycle, status FROM subscriptions WHERE id = ? AND user_id = ?");
     mysqli_stmt_bind_param($current_sub_stmt, "ii", $id, $user_id);
     mysqli_stmt_execute($current_sub_stmt);
     $current_sub_result = mysqli_stmt_get_result($current_sub_stmt);
@@ -88,36 +52,29 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['edit_id'], $_POST['edi
 
     // Prepare and execute the UPDATE statement for the subscription.
     // MODIFIED: Include user_monthly_price and user_yearly_price in the update
-    $stmt = mysqli_prepare($conn, "UPDATE subscriptions SET payment_method = ?, next_payment_date = ?, status = 'Active', user_monthly_price = ?, user_yearly_price = ? WHERE id = ? AND user_id = ?");
+    $stmt = mysqli_prepare($conn, "UPDATE subscriptions SET billing_cycle = ?, next_payment_date = ?, status = 'Active', user_monthly_price = ?, user_yearly_price = ? WHERE id = ? AND user_id = ?");
     if ($stmt) {
         mysqli_stmt_bind_param($stmt, "ssddii", $billing_cycle, $next_payment_date, $user_monthly_price, $user_yearly_price, $id, $user_id);
         if (!mysqli_stmt_execute($stmt)) {
             die('Subscription Update Error: ' . mysqli_stmt_error($stmt));
         }
 
-        // Ambil harga yang sesuai setelah update (prioritaskan user-defined price)
-        $app_price_query = mysqli_prepare($conn, "SELECT monthly_price, yearly_price FROM apps WHERE id = ?");
-        mysqli_stmt_bind_param($app_price_query, "i", $app_id);
-        mysqli_stmt_execute($app_price_query);
-        $app_price_result = mysqli_stmt_get_result($app_price_query);
-        $app_prices = mysqli_fetch_assoc($app_price_result);
-        mysqli_stmt_close($app_price_query);
+        // Langganan Inactive yang diedit akan aktif kembali: catat pembayaran pada tanggal mulai baru.
+        // Edit pada langganan yang masih Active hanya mengubah pengaturan, tanpa tagihan baru.
+        if ($current_sub_data['status'] == 'Inactive') {
+            $app_price_query = mysqli_prepare($conn, "SELECT monthly_price, yearly_price FROM apps WHERE id = ?");
+            mysqli_stmt_bind_param($app_price_query, "i", $app_id);
+            mysqli_stmt_execute($app_price_query);
+            $app_price_result = mysqli_stmt_get_result($app_price_query);
+            $app_prices = mysqli_fetch_assoc($app_price_result);
+            mysqli_stmt_close($app_price_query);
 
-        $amount_to_log = 0;
-        // PRIORITIZE: Use user-defined price if available, otherwise fallback to app's default price
-        if ($billing_cycle == 'Monthly') {
-            $amount_to_log = ($user_monthly_price !== NULL) ? $user_monthly_price : $app_prices['monthly_price'];
-        } elseif ($billing_cycle == 'Yearly') {
-            $amount_to_log = ($user_yearly_price !== NULL) ? $user_yearly_price : $app_prices['yearly_price'];
-        }
+            // PRIORITIZE: Use user-defined price if available, otherwise fallback to app's default price
+            $amount_to_log = subscription_price($billing_cycle, $user_monthly_price, $user_yearly_price, $app_prices['monthly_price'], $app_prices['yearly_price']);
 
-        if ($amount_to_log > 0) {
-            // Catat pengeluaran ke spending_logs saat langganan diedit
-            $log_description = "Subscription updated and charged for " . htmlspecialchars($billing_cycle);
-            $log_stmt = mysqli_prepare($conn, "INSERT INTO spending_logs (user_id, subscription_id, app_id, amount, transaction_date, description) VALUES (?, ?, ?, ?, ?, ?)");
-            mysqli_stmt_bind_param($log_stmt, "iiisss", $user_id, $id, $app_id, $amount_to_log, date('Y-m-d'), $log_description);
-            mysqli_stmt_execute($log_stmt);
-            mysqli_stmt_close($log_stmt);
+            if ($amount_to_log > 0) {
+                log_spending($conn, $user_id, $id, $app_id, $amount_to_log, $start_date_str, "Subscription reactivated (" . $billing_cycle . ")");
+            }
         }
 
     } else {
@@ -190,26 +147,26 @@ if (!$apps_query) {
 
 // --- Subscription insertion process (Add) ---
 // This block handles the submission of the add subscription form.
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['app_id'], $_POST['payment_method']) && !isset($_POST['edit_id'])) {
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['app_id'], $_POST['billing_cycle']) && !isset($_POST['edit_id'])) {
     $app_id = $_POST['app_id'];
-    $payment_method = $_POST['payment_method'];
+    $billing_cycle = $_POST['billing_cycle'];
     // NEW: Get custom prices from POST data for new subscription
     $user_monthly_price = isset($_POST['add_monthly_price']) && $_POST['add_monthly_price'] !== '' ? (float)$_POST['add_monthly_price'] : NULL;
     $user_yearly_price = isset($_POST['add_yearly_price']) && $_POST['add_yearly_price'] !== '' ? (float)$_POST['add_yearly_price'] : NULL;
 
-    // Validate input for app_id and payment_method
-    if (!is_numeric($app_id) || !in_array($payment_method, ['Monthly', 'Yearly'])) {
+    // Validate input for app_id and billing_cycle
+    if (!is_numeric($app_id) || !in_array($billing_cycle, ['Monthly', 'Yearly'])) {
         die("Invalid input");
     }
 
     // Determine next payment date based on selected payment method
-    $date = ($payment_method == 'Monthly') ? date('Y-m-d', strtotime("+30 days")) : date('Y-m-d', strtotime("+1 year"));
+    $date = ($billing_cycle == 'Monthly') ? date('Y-m-d', strtotime("+30 days")) : date('Y-m-d', strtotime("+1 year"));
 
     // Prepare and execute the INSERT statement for a new subscription.
     // MODIFIED: Include user_monthly_price and user_yearly_price in the insert
-    $stmt = mysqli_prepare($conn, "INSERT INTO subscriptions (app_id, next_payment_date, status, payment_method, user_id, user_monthly_price, user_yearly_price) VALUES (?, ?, 'Active', ?, ?, ?, ?)");
+    $stmt = mysqli_prepare($conn, "INSERT INTO subscriptions (app_id, next_payment_date, status, billing_cycle, user_id, user_monthly_price, user_yearly_price) VALUES (?, ?, 'Active', ?, ?, ?, ?)");
     if ($stmt) {
-        mysqli_stmt_bind_param($stmt, "issidd", $app_id, $date, $payment_method, $user_id, $user_monthly_price, $user_yearly_price);
+        mysqli_stmt_bind_param($stmt, "issidd", $app_id, $date, $billing_cycle, $user_id, $user_monthly_price, $user_yearly_price);
         if (!mysqli_stmt_execute($stmt)) {
             die('Subscription Insertion Error: ' . mysqli_stmt_error($stmt)); // Handle execution errors
         }
@@ -225,21 +182,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['app_id'], $_POST['paym
         $app_prices = mysqli_fetch_assoc($app_price_result);
         mysqli_stmt_close($app_price_query);
 
-        $amount_to_log = 0;
         // PRIORITIZE: Use user-defined price if available, otherwise fallback to app's default price
-        if ($payment_method == 'Monthly') {
-            $amount_to_log = ($user_monthly_price !== NULL) ? $user_monthly_price : $app_prices['monthly_price'];
-        } elseif ($payment_method == 'Yearly') {
-            $amount_to_log = ($user_yearly_price !== NULL) ? $user_yearly_price : $app_prices['yearly_price'];
-        }
+        $amount_to_log = subscription_price($billing_cycle, $user_monthly_price, $user_yearly_price, $app_prices['monthly_price'], $app_prices['yearly_price']);
 
         if ($amount_to_log > 0) {
             // Catat pengeluaran awal ke spending_logs
-            $log_description = "Initial charge for " . htmlspecialchars($payment_method) . " subscription.";
-            $log_stmt = mysqli_prepare($conn, "INSERT INTO spending_logs (user_id, subscription_id, app_id, amount, transaction_date, description) VALUES (?, ?, ?, ?, ?, ?)");
-            mysqli_stmt_bind_param($log_stmt, "iiisss", $user_id, $new_subscription_id, $app_id, $amount_to_log, date('Y-m-d'), $log_description);
-            mysqli_stmt_execute($log_stmt);
-            mysqli_stmt_close($log_stmt);
+            log_spending($conn, $user_id, $new_subscription_id, $app_id, $amount_to_log, date('Y-m-d'), "Initial charge for " . $billing_cycle . " subscription.");
         }
 
     } else {
@@ -386,8 +334,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['app_id'], $_POST['paym
 
           <td class="p-4 border-b border-gray-200">
             <span class="inline-block px-3 py-1 rounded-full text-xs font-medium billing-cycle
-              <?= $row['payment_method'] == 'Monthly' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700' ?>">
-              <?= htmlspecialchars($row['payment_method']) ?>
+              <?= $row['billing_cycle'] == 'Monthly' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700' ?>">
+              <?= htmlspecialchars($row['billing_cycle']) ?>
             </span>
           </td>
 
@@ -399,9 +347,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['app_id'], $_POST['paym
             <?php
               $amount = null;
               // PRIORITIZE: Display user-defined price if available, otherwise fallback to app's default price
-              if ($row['payment_method'] == 'Monthly') {
+              if ($row['billing_cycle'] == 'Monthly') {
                   $amount = ($row['user_monthly_price'] !== NULL) ? $row['user_monthly_price'] : $row['default_monthly_price'];
-              } elseif ($row['payment_method'] == 'Yearly') {
+              } elseif ($row['billing_cycle'] == 'Yearly') {
                   $amount = ($row['user_yearly_price'] !== NULL) ? $row['user_yearly_price'] : $row['default_yearly_price'];
               }
 
@@ -433,14 +381,18 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['app_id'], $_POST['paym
               </svg>
               Edit
             </button>
-            <a href="delete_subscription.php?id=<?= $row['id'] ?>"
-               onclick="event.stopPropagation(); return confirm('Are you sure you want to delete this subscription?')"
-               class="flex items-center gap-1 bg-red-500 text-white px-3 py-1 rounded text-xs hover:bg-red-600 transition-colors duration-200">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M6 4a2 2 0 012-2h4a2 2 0 012 2h4v2H2V4h4zm3 4v8h2V8H9zm4 0v8h2V8h-2z" clip-rule="evenodd"/>
-              </svg>
-              Delete
-            </a>
+            <form action="delete_subscription.php" method="POST"
+                  onclick="event.stopPropagation();"
+                  onsubmit="return confirm('Are you sure you want to delete this subscription?')">
+              <input type="hidden" name="id" value="<?= $row['id'] ?>">
+              <button type="submit"
+                      class="flex items-center gap-1 bg-red-500 text-white px-3 py-1 rounded text-xs hover:bg-red-600 transition-colors duration-200">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M6 4a2 2 0 012-2h4a2 2 0 012 2h4v2H2V4h4zm3 4v8h2V8H9zm4 0v8h2V8h-2z" clip-rule="evenodd"/>
+                </svg>
+                Delete
+              </button>
+            </form>
           </td>
         </tr>
         <?php } ?>
@@ -666,7 +618,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['app_id'], $_POST['paym
 
 
       const availableCycles = selectedApp.available_cycles ? selectedApp.available_cycles.split(',').map(c => c.trim()) : [];
-      const currentPaymentMethod = subscription.payment_method;
+      const currentPaymentMethod = subscription.billing_cycle;
 
       // Enable Monthly if available and has price
       if (availableCycles.includes('Monthly') && selectedApp.monthly_price !== null && selectedApp.monthly_price !== '') {
@@ -797,12 +749,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['app_id'], $_POST['paym
         <div class="mb-5">
           <label class="block text-sm font-semibold text-gray-700 mb-2">Payment Method</label>
           <div class="toggle-button-group">
-            <input type="radio" id="monthlyToggle" name="payment_method" value="Monthly" onchange="handlePaymentToggle('monthlyToggle')" disabled>
+            <input type="radio" id="monthlyToggle" name="billing_cycle" value="Monthly" onchange="handlePaymentToggle('monthlyToggle')" disabled>
             <label for="monthlyToggle" id="monthlyToggleLabel">
               Monthly <span id="monthlyPriceDisplay" class="text-gray-500 font-normal ml-1"></span>
             </label>
 
-            <input type="radio" id="yearlyToggle" name="payment_method" value="Yearly" onchange="handlePaymentToggle('yearlyToggle')" disabled>
+            <input type="radio" id="yearlyToggle" name="billing_cycle" value="Yearly" onchange="handlePaymentToggle('yearlyToggle')" disabled>
             <label for="yearlyToggle" id="yearlyToggleLabel">
               Yearly <span id="yearlyPriceDisplay" class="text-gray-500 font-normal ml-1"></span>
             </label>

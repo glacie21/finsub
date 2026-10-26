@@ -1,27 +1,23 @@
 <?php
+include 'auth.php';
 include 'config.php';
-// Anda mungkin perlu menyertakan auth.php atau memastikan session_start() dan $user_id diatur di sini
-// Contoh:
-if (session_status() == PHP_SESSION_NONE) {
-    session_start();
-}
-$user_id = $_SESSION['user_id'] ?? null; // Dapatkan ID pengguna dari sesi
+include 'functions.php';
 
-if (!$user_id) {
-    // Arahkan ke halaman login jika user_id tidak ada
-    header('Location: login.php');
-    exit;
-}
+$user_id = (int) $_SESSION['user_id']; // Dapatkan ID pengguna dari sesi
 
 
 // Handle Add Subscription POST
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $app_id = $_POST['app_id'] ?? null;
-    $payment_method = $_POST['payment_method'] ?? null;
+    $billing_cycle = $_POST['billing_cycle'] ?? null;
     $start_date = $_POST['start_date'] ?? date('Y-m-d'); // Ambil start_date dari form
 
-    if (!is_numeric($app_id) || !$payment_method) {
+    if (!is_numeric($app_id) || !in_array($billing_cycle, ['Monthly', 'Yearly'])) {
         die("Invalid input");
+    }
+
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $start_date) || !strtotime($start_date)) {
+        die("Invalid start date");
     }
 
     // Ambil available_cycles, monthly_price, dan yearly_price dari db
@@ -38,9 +34,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     }
 
     $price_to_use = 0;
-    if ($payment_method == 'Monthly') {
+    if ($billing_cycle == 'Monthly') {
         $price_to_use = $app_data['monthly_price'];
-    } elseif ($payment_method == 'Yearly') {
+    } elseif ($billing_cycle == 'Yearly') {
         $price_to_use = $app_data['yearly_price'];
     }
 
@@ -48,30 +44,19 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         die("Invalid price for selected billing cycle.");
     }
 
-    // Hitung next_payment_date berdasarkan start_date dan payment_method
-    $next_payment_date = date('Y-m-d', strtotime($start_date . ($payment_method == 'Monthly' ? ' +1 month' : ' +1 year')));
+    // Hitung next_payment_date berdasarkan start_date dan billing_cycle
+    $next_payment_date = next_billing_date($start_date, $billing_cycle);
 
-    // Insert ke tabel subscriptions
-    $stmt_insert = mysqli_prepare($conn, "INSERT INTO subscriptions (user_id, app_id, payment_method, price, next_payment_date, status, start_date) VALUES (?, ?, ?, ?, ?, 'Active', ?)");
-    mysqli_stmt_bind_param($stmt_insert, "iisdss", $user_id, $app_id, $payment_method, $price_to_use, $next_payment_date, $start_date);
+    // Insert ke tabel subscriptions (harga default diambil dari tabel apps, jadi tidak disimpan di sini)
+    $stmt_insert = mysqli_prepare($conn, "INSERT INTO subscriptions (user_id, app_id, billing_cycle, next_payment_date, status) VALUES (?, ?, ?, ?, 'Active')");
+    mysqli_stmt_bind_param($stmt_insert, "iiss", $user_id, $app_id, $billing_cycle, $next_payment_date);
 
     if (mysqli_stmt_execute($stmt_insert)) {
         $subscription_id = mysqli_insert_id($conn); // Dapatkan ID langganan yang baru dibuat
-        
-        // --- START: Tambahkan Log Pengeluaran Pertama ---
-        $description = "Initial payment for " . $app_data['name'] . " (" . $payment_method . ")";
-        $stmt_log = mysqli_prepare($conn, "INSERT INTO spending_logs (user_id, subscription_id, app_id, amount, log_date, description, transaction_date) VALUES (?, ?, ?, ?, ?, ?, ?)");
-        // Perhatikan bahwa $app_data['category_id'] tidak langsung masuk ke spending_logs, 
-        // tapi kita masukkan app_id, sehingga nanti bisa diJOIN dengan apps dan categories.
-        // transaction_date akan menyimpan tanggal pembayaran actual.
-        mysqli_stmt_bind_param($stmt_log, "iidssis", $user_id, $subscription_id, $app_id, $price_to_use, date('Y-m-d'), $description, $start_date); 
-        
-        if (!mysqli_stmt_execute($stmt_log)) {
-            error_log("Error inserting initial spending log: " . mysqli_error($conn));
-            // Anda bisa menambahkan pesan error ke user jika perlu, atau cukup log saja
-        }
-        mysqli_stmt_close($stmt_log);
-        // --- END: Tambahkan Log Pengeluaran Pertama ---
+
+        // Log pengeluaran pertama; transaction_date menyimpan tanggal pembayaran aktual (start_date).
+        // Jika start_date di masa lalu, tagihan yang terlewat dicatat oleh renew_due_subscriptions().
+        log_spending($conn, $user_id, $subscription_id, $app_id, $price_to_use, $start_date, "Initial payment for " . $app_data['name'] . " (" . $billing_cycle . ")");
 
         header('Location: index.php');
         exit;
@@ -128,11 +113,11 @@ mysqli_close($conn);
           <label class="block text-sm font-medium text-gray-700 mb-2">Billing Cycle</label>
           <div class="flex gap-4">
             <label class="flex-1 flex items-center gap-2 border p-3 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors duration-200">
-              <input type="radio" id="cycleMonthly" name="payment_method" value="Monthly" class="form-radio h-4 w-4 text-blue-600" required>
+              <input type="radio" id="cycleMonthly" name="billing_cycle" value="Monthly" class="form-radio h-4 w-4 text-blue-600" required>
               <span class="text-gray-900">Monthly</span>
             </label>
             <label class="flex-1 flex items-center gap-2 border p-3 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors duration-200">
-              <input type="radio" id="cycleYearly" name="payment_method" value="Yearly" class="form-radio h-4 w-4 text-blue-600">
+              <input type="radio" id="cycleYearly" name="billing_cycle" value="Yearly" class="form-radio h-4 w-4 text-blue-600">
               <span class="text-gray-900">Yearly</span>
             </label>
           </div>
@@ -222,7 +207,7 @@ mysqli_close($conn);
   function updateNextPaymentDatePreview() {
       const selectedApp = Array.from(appRadios).find(radio => radio.checked);
       const startDate = startDateInput.value;
-      const selectedCycle = document.querySelector('input[name="payment_method"]:checked')?.value;
+      const selectedCycle = document.querySelector('input[name="billing_cycle"]:checked')?.value;
 
       if (!startDate || !selectedApp || !selectedCycle) {
           nextPaymentPreview.textContent = 'Select start date, app, and billing cycle to preview.';
