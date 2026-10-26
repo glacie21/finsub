@@ -171,7 +171,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['edit_id'], $_POST['edi
     }
 
     // Update the database (edit selalu mengaktifkan langganan, sama seperti di index.php)
-    $stmt_update = mysqli_prepare($conn, "UPDATE subscriptions SET billing_cycle = ?, next_payment_date = ?, status = 'Active', user_monthly_price = ?, user_yearly_price = ? WHERE id = ? AND user_id = ?");
+    // auto_renew harus di-assign sebelum status: MySQL mengevaluasi SET dari kiri ke kanan, jadi IF() masih membaca status lama.
+    // Langganan Inactive yang diaktifkan kembali otomatis diperpanjang lagi; edit pada langganan yang sudah di-cancel tidak membatalkan cancel-nya.
+    $stmt_update = mysqli_prepare($conn, "UPDATE subscriptions SET auto_renew = IF(status = 'Inactive', 1, auto_renew), billing_cycle = ?, next_payment_date = ?, status = 'Active', user_monthly_price = ?, user_yearly_price = ? WHERE id = ? AND user_id = ?");
     if ($stmt_update) {
         mysqli_stmt_bind_param($stmt_update, "ssddii", $edit_billing_cycle, $next_payment_date, $user_monthly_price, $user_yearly_price, $edit_id, $user_id);
         if (!mysqli_stmt_execute($stmt_update)) {
@@ -335,6 +337,15 @@ if ($data['billing_cycle'] == 'Monthly') {
     $current_price = ($data['user_yearly_price'] !== NULL) ? $data['user_yearly_price'] : $data['default_yearly_price'];
 }
 
+// Kalkulator hemat Monthly vs Yearly (hanya jika app menyediakan kedua siklus)
+$savings = null;
+$available_cycles = array_map('trim', explode(',', $data['available_cycles'] ?? ''));
+if (in_array('Monthly', $available_cycles) && in_array('Yearly', $available_cycles)) {
+    $compare_monthly_price = subscription_price('Monthly', $data['user_monthly_price'], $data['user_yearly_price'], $data['default_monthly_price'], $data['default_yearly_price']);
+    $compare_yearly_price = subscription_price('Yearly', $data['user_monthly_price'], $data['user_yearly_price'], $data['default_monthly_price'], $data['default_yearly_price']);
+    $savings = yearly_savings($compare_monthly_price, $compare_yearly_price);
+}
+
 // Fetch other apps in the same category (excluding the current one)
 $similar_apps_query = mysqli_prepare($conn, "
     SELECT id, name, monthly_price, yearly_price, available_cycles
@@ -421,13 +432,18 @@ if ($has_this_month_usage) {
                     <p class="text-gray-500">Billing Cycle</p>
                     <p class="font-medium" id="currentBillingCycle"><?= htmlspecialchars($data['billing_cycle']) ?></p>
                 </div>
+                <?php $is_cancelled = ($data['status'] == 'Active' && !$data['auto_renew']); ?>
                 <div>
-                    <p class="text-gray-500">Next Payment Date</p>
+                    <p class="text-gray-500"><?= $is_cancelled ? 'Ends On' : 'Next Payment Date' ?></p>
                     <p class="font-medium" id="currentNextPaymentDate"><?= date('F j, Y', strtotime($data['next_payment_date'])) ?></p>
                 </div>
                 <div>
                     <p class="text-gray-500">Status</p>
-                    <p class="font-medium text-<?= $data['status'] == 'Active' ? 'green' : 'red' ?>-600"><?= htmlspecialchars($data['status']) ?></p>
+                    <?php if ($is_cancelled): ?>
+                        <p class="font-medium text-amber-600">Cancelled (active until <?= date('M j, Y', strtotime($data['next_payment_date'])) ?>)</p>
+                    <?php else: ?>
+                        <p class="font-medium text-<?= $data['status'] == 'Active' ? 'green' : 'red' ?>-600"><?= htmlspecialchars($data['status']) ?></p>
+                    <?php endif; ?>
                 </div>
                 <div>
                     <p class="text-gray-500">Price</p>
@@ -447,11 +463,20 @@ if ($has_this_month_usage) {
                         class="bg-blue-600 text-white px-5 py-2 rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors duration-200 shadow-md">
                     Edit Subscription
                 </button>
-                <?php if ($data['status'] == 'Active'): ?>
-                <form action="set_inactive.php" method="POST" onsubmit="return confirm('Stop this subscription? It will no longer renew automatically. You can reactivate it later via Edit.')">
+                <?php if ($is_cancelled): ?>
+                <form action="set_auto_renew.php" method="POST">
                     <input type="hidden" name="id" value="<?= $data['id'] ?>">
+                    <input type="hidden" name="auto_renew" value="1">
+                    <button type="submit" class="bg-green-600 text-white px-5 py-2 rounded-lg hover:bg-green-700 text-sm font-medium transition-colors duration-200 shadow-md">
+                        Resume Auto-Renew
+                    </button>
+                </form>
+                <?php elseif ($data['status'] == 'Active'): ?>
+                <form action="set_auto_renew.php" method="POST" onsubmit="return confirm('Cancel this subscription? It stays active until <?= date('M j, Y', strtotime($data['next_payment_date'])) ?> and will not be charged again.')">
+                    <input type="hidden" name="id" value="<?= $data['id'] ?>">
+                    <input type="hidden" name="auto_renew" value="0">
                     <button type="submit" class="bg-gray-600 text-white px-5 py-2 rounded-lg hover:bg-gray-700 text-sm font-medium transition-colors duration-200 shadow-md">
-                        Stop Subscription
+                        Cancel Subscription
                     </button>
                 </form>
                 <?php endif; ?>
@@ -474,6 +499,39 @@ if ($has_this_month_usage) {
                 <?php endif; ?>
             </div>
         </div>
+
+        <?php if ($savings !== null): ?>
+        <!-- Monthly vs Yearly savings calculator -->
+        <div class="bg-white rounded-xl shadow-md p-6 mb-8">
+            <h3 class="text-xl font-semibold mb-4">Monthly vs Yearly</h3>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm mb-4">
+                <div class="p-3 rounded-lg <?= $data['billing_cycle'] == 'Monthly' ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50' ?>">
+                    <p class="text-gray-500">Monthly (×12)<?= $data['billing_cycle'] == 'Monthly' ? ' · current' : '' ?></p>
+                    <p class="font-bold text-lg">$<?= number_format($compare_monthly_price * 12, 2) ?><span class="text-sm font-normal text-gray-500">/year</span></p>
+                </div>
+                <div class="p-3 rounded-lg <?= $data['billing_cycle'] == 'Yearly' ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50' ?>">
+                    <p class="text-gray-500">Yearly<?= $data['billing_cycle'] == 'Yearly' ? ' · current' : '' ?></p>
+                    <p class="font-bold text-lg">$<?= number_format($compare_yearly_price, 2) ?><span class="text-sm font-normal text-gray-500">/year</span></p>
+                </div>
+            </div>
+            <?php if ($savings > 0 && $data['billing_cycle'] == 'Monthly'): ?>
+                <p class="text-green-700 bg-green-50 p-3 rounded-lg text-sm">
+                    💡 Switch to <strong>Yearly</strong> to save <strong>$<?= number_format($savings, 2) ?>/year</strong>
+                    (<?= number_format($savings / ($compare_monthly_price * 12) * 100, 0) ?>% cheaper). Use "Edit Subscription" to change the billing cycle.
+                </p>
+            <?php elseif ($savings > 0): ?>
+                <p class="text-green-700 bg-green-50 p-3 rounded-lg text-sm">
+                    ✅ You're saving <strong>$<?= number_format($savings, 2) ?>/year</strong> by paying yearly instead of monthly.
+                </p>
+            <?php elseif ($savings < 0 && $data['billing_cycle'] == 'Yearly'): ?>
+                <p class="text-amber-700 bg-amber-50 p-3 rounded-lg text-sm">
+                    💡 Paying <strong>Monthly</strong> would be <strong>$<?= number_format(-$savings, 2) ?>/year</strong> cheaper.
+                </p>
+            <?php else: ?>
+                <p class="text-gray-600 bg-gray-50 p-3 rounded-lg text-sm">Your current billing cycle is already the cheaper option.</p>
+            <?php endif; ?>
+        </div>
+        <?php endif; ?>
 
         <div class="bg-white rounded-xl shadow-md p-6 mb-8">
             <h3 class="text-xl font-semibold mb-4">Usage Statistics (Last <?= $num_months ?> Months)</h3>

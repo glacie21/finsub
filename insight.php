@@ -174,6 +174,47 @@ if ($stmt) {
     error_log(mysqli_error($conn));
 }
 
+// ====================== QUERY 4: Actual Spending Summary ======================
+// Total pengeluaran aktual (dari spending_logs) bulan ini, bulan lalu, dan tahun ini
+$spent_this_month = 0;
+$spent_last_month = 0;
+$spent_this_year  = 0;
+
+$this_month_start = date('Y-m-01');
+$last_month_start = date('Y-m-01', strtotime($this_month_start . ' -1 month'));
+$this_year_start  = date('Y-01-01');
+
+$stmt = mysqli_prepare($conn, "
+    SELECT
+        SUM(CASE WHEN transaction_date >= ? THEN amount ELSE 0 END) AS this_month,
+        SUM(CASE WHEN transaction_date >= ? AND transaction_date < ? THEN amount ELSE 0 END) AS last_month,
+        SUM(CASE WHEN transaction_date >= ? THEN amount ELSE 0 END) AS this_year
+    FROM spending_logs
+    WHERE user_id = ? AND transaction_date <= CURDATE()
+");
+
+if ($stmt) {
+    mysqli_stmt_bind_param($stmt, "ssssi", $this_month_start, $last_month_start, $this_month_start, $this_year_start, $user_id);
+
+    if (mysqli_stmt_execute($stmt)) {
+        $row = mysqli_fetch_assoc(mysqli_stmt_get_result($stmt));
+        $spent_this_month = (float) ($row['this_month'] ?? 0);
+        $spent_last_month = (float) ($row['last_month'] ?? 0);
+        $spent_this_year  = (float) ($row['this_year'] ?? 0);
+    } else {
+        error_log(mysqli_stmt_error($stmt));
+    }
+
+    mysqli_stmt_close($stmt);
+} else {
+    error_log(mysqli_error($conn));
+}
+
+// Perubahan dibanding bulan lalu (null jika bulan lalu tidak ada pengeluaran)
+$month_change_pct = $spent_last_month > 0
+    ? (($spent_this_month - $spent_last_month) / $spent_last_month) * 100
+    : null;
+
 // ====================== AI INSIGHT PLACEHOLDER ======================
 //
 // Di sini Anda dapat mengintegrasikan layanan AI pilihan Anda untuk menghasilkan
@@ -220,6 +261,31 @@ $general_insight = "Fitur AI Insight belum dikonfigurasi. Hubungi administrator 
     <section class="p-4 md:p-6 max-w-7xl mx-auto space-y-8">
 
         <h1 class="text-2xl md:text-3xl font-bold text-gray-800">Spending Insight</h1>
+
+        <!-- Actual Spending Summary -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-6">
+            <div class="bg-white rounded-xl shadow-md p-6">
+                <p class="text-sm text-gray-500">Spent This Month (<?= date('M Y') ?>)</p>
+                <p class="text-2xl font-bold mt-1">$<?= number_format($spent_this_month, 2) ?></p>
+                <?php if ($month_change_pct === null): ?>
+                    <p class="text-xs text-gray-500 mt-1">No spending recorded last month</p>
+                <?php elseif (round($month_change_pct, 1) == 0): ?>
+                    <p class="text-xs text-gray-500 mt-1">Same as last month</p>
+                <?php else: ?>
+                    <p class="text-xs mt-1 <?= $month_change_pct > 0 ? 'text-red-600' : 'text-green-600' ?>">
+                        <?= $month_change_pct > 0 ? '▲' : '▼' ?> <?= number_format(abs($month_change_pct), 1) ?>% vs last month
+                    </p>
+                <?php endif; ?>
+            </div>
+            <div class="bg-white rounded-xl shadow-md p-6">
+                <p class="text-sm text-gray-500">Spent Last Month (<?= date('M Y', strtotime($last_month_start)) ?>)</p>
+                <p class="text-2xl font-bold mt-1">$<?= number_format($spent_last_month, 2) ?></p>
+            </div>
+            <div class="bg-white rounded-xl shadow-md p-6">
+                <p class="text-sm text-gray-500">Spent This Year (<?= date('Y') ?>)</p>
+                <p class="text-2xl font-bold mt-1">$<?= number_format($spent_this_year, 2) ?></p>
+            </div>
+        </div>
 
         <!-- AI Insight Card -->
         <div class="bg-white rounded-xl shadow-md p-6 border-l-4 border-blue-500">
