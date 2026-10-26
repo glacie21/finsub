@@ -1,6 +1,7 @@
 <?php
 include 'auth.php';
 include 'config.php';
+include 'functions.php';
 
 // Security headers
 header("X-Content-Type-Options: nosniff");
@@ -14,6 +15,9 @@ if ($user_id <= 0) {
     die('Session error. Please log in again.');
 }
 
+// Perpanjang otomatis langganan yang jatuh tempo agar riwayat pengeluaran up to date
+renew_due_subscriptions($conn, $user_id);
+
 // ====================== QUERY 1: Spending per Category ======================
 $current_month_spending = [];
 $all_categories = [];
@@ -21,8 +25,8 @@ $all_categories = [];
 $stmt = mysqli_prepare($conn, "
     SELECT c.name AS category_name,
         SUM(CASE
-            WHEN s.payment_method = 'Monthly' THEN COALESCE(s.user_monthly_price, a.monthly_price)
-            WHEN s.payment_method = 'Yearly'  THEN COALESCE(s.user_yearly_price, a.yearly_price) / 12
+            WHEN s.billing_cycle = 'Monthly' THEN COALESCE(s.user_monthly_price, a.monthly_price)
+            WHEN s.billing_cycle = 'Yearly'  THEN COALESCE(s.user_yearly_price, a.yearly_price) / 12
             ELSE 0
         END) AS estimated_monthly_cost
     FROM subscriptions s
@@ -64,14 +68,51 @@ $months                   = [];
 $monthly_category_spending = [];
 
 for ($i = $num_months - 1; $i >= 0; $i--) {
-    $month    = date('Y-m', strtotime("-$i months"));
-    $months[] = $month;
+    // Pakai tanggal 1 agar "-N months" tidak meloncati bulan pendek
+    $months[] = date('Y-m', strtotime(date('Y-m-01') . " -$i months"));
+}
 
-    foreach ($all_categories as $cat) {
-        $monthly_category_spending[$cat][$month] =
-            ($i === 0)
-            ? ($current_month_spending[$cat] ?? 0)
-            : max(0, rand(5, 50)); // Placeholder: replace with real historical data if available
+// Pengeluaran aktual per kategori per bulan dari spending_logs
+$spending_by_month = [];
+
+$stmt = mysqli_prepare($conn, "
+    SELECT c.name AS category_name,
+           DATE_FORMAT(sl.transaction_date, '%Y-%m') AS month,
+           SUM(sl.amount) AS total_amount
+    FROM spending_logs sl
+    JOIN apps a ON sl.app_id = a.id
+    JOIN categories c ON a.category_id = c.id
+    WHERE sl.user_id = ? AND sl.transaction_date >= ? AND sl.transaction_date <= CURDATE()
+    GROUP BY category_name, month
+");
+
+if ($stmt) {
+    $first_month_start = $months[0] . '-01';
+    mysqli_stmt_bind_param($stmt, "is", $user_id, $first_month_start);
+
+    if (mysqli_stmt_execute($stmt)) {
+        $result = mysqli_stmt_get_result($stmt);
+
+        while ($row = mysqli_fetch_assoc($result)) {
+            $spending_by_month[$row['category_name']][$row['month']] = (float) $row['total_amount'];
+
+            // Sertakan juga kategori dari langganan yang sekarang sudah tidak aktif
+            if (!in_array($row['category_name'], $all_categories, true)) {
+                $all_categories[] = $row['category_name'];
+            }
+        }
+    } else {
+        error_log(mysqli_stmt_error($stmt));
+    }
+
+    mysqli_stmt_close($stmt);
+} else {
+    error_log(mysqli_error($conn));
+}
+
+foreach ($all_categories as $cat) {
+    foreach ($months as $month) {
+        $monthly_category_spending[$cat][$month] = $spending_by_month[$cat][$month] ?? 0;
     }
 }
 

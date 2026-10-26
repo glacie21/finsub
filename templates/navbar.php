@@ -1,6 +1,6 @@
 <?php
 // Pastikan session sudah dimulai di halaman yang memanggil navbar ini.
-// Contoh: dashboard.php, index.php, insight.php, recommendations.php
+// Contoh: dashboard.php, index.php, insight.php, set_reminder.php
 // Jika tidak, Anda mungkin perlu menambahkan session_start() di awal file-file tersebut.
 // session_start(); // Jangan uncomment ini jika sudah ada di file induk!
 
@@ -16,14 +16,16 @@ $upcoming_subscriptions = [];
 $notification_count = 0;
 
 if ($user_id && isset($conn)) { // Hanya jalankan query jika user_id dan koneksi DB tersedia
-    // Query untuk mendapatkan langganan aktif yang next_payment_date-nya dalam 30 hari ke depan
+    // Query untuk mendapatkan langganan aktif yang pengingatnya menyala dan jatuh tempo
+    // dalam rentang hari yang diatur user di set_reminder.php (default 30 hari)
     $stmt_upcoming_subs = mysqli_prepare($conn, "
-        SELECT s.id, a.name AS app_name, s.next_payment_date, s.payment_method
+        SELECT s.id, a.name AS app_name, s.next_payment_date, s.billing_cycle
         FROM subscriptions s
         JOIN apps a ON s.app_id = a.id
         WHERE s.user_id = ?
         AND s.status = 'Active'
-        AND s.next_payment_date <= CURDATE() + INTERVAL 30 DAY
+        AND s.reminder_enabled = 1
+        AND s.next_payment_date <= CURDATE() + INTERVAL s.reminder_days_before DAY
         AND s.next_payment_date >= CURDATE()
         ORDER BY s.next_payment_date ASC
         LIMIT 5
@@ -73,14 +75,14 @@ if ($user_id && isset($conn)) { // Hanya jalankan query jika user_id dan koneksi
         </button>
 
         <div id="notificationDropdown" class="absolute right-0 mt-2 w-72 bg-white rounded-md shadow-lg py-1 z-20 hidden">
-            <div class="block px-4 py-2 text-xs text-gray-400 border-b border-gray-100">Upcoming Payments (Next 30 Days)</div>
+            <div class="block px-4 py-2 text-xs text-gray-400 border-b border-gray-100">Upcoming Payments</div>
             <?php if (!empty($upcoming_subscriptions)): ?>
                 <?php foreach ($upcoming_subscriptions as $sub): ?>
                     <a href="detail_subscription.php?id=<?= $sub['id'] ?>" class="flex items-center px-4 py-3 text-sm text-gray-700 hover:bg-gray-100 transition">
                         <div class="ml-1">
                             <span class="font-semibold"><?= htmlspecialchars($sub['app_name']) ?></span>
                             <p class="text-xs text-gray-500">
-                                Due: <?= date('M j, Y', strtotime($sub['next_payment_date'])) ?> (<?= htmlspecialchars($sub['payment_method']) ?>)
+                                Due: <?= date('M j, Y', strtotime($sub['next_payment_date'])) ?> (<?= htmlspecialchars($sub['billing_cycle']) ?>)
                             </p>
                         </div>
                     </a>
@@ -89,6 +91,7 @@ if ($user_id && isset($conn)) { // Hanya jalankan query jika user_id dan koneksi
                 <div class="block px-4 py-3 text-sm text-gray-700">No upcoming payments.</div>
             <?php endif; ?>
             <a href="index.php?filter=Active" class="block text-center px-4 py-2 text-sm text-blue-600 hover:bg-blue-50 border-t border-gray-200">View All Active Subscriptions</a>
+            <a href="set_reminder.php" class="block text-center px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 border-t border-gray-200">Reminder Settings</a>
         </div>
     </div>
 
@@ -102,6 +105,7 @@ if ($user_id && isset($conn)) { // Hanya jalankan query jika user_id dan koneksi
         </button>
         <ul id="profileDropdown" class="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 hidden z-10">
             <li><a href="profile.php" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Profile</a></li>
+            <li><a href="set_reminder.php" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Reminders</a></li>
             <li><a href="logout.php" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Logout</a></li>
         </ul>
     </div>
@@ -122,9 +126,9 @@ if ($user_id && isset($conn)) { // Hanya jalankan query jika user_id dan koneksi
     <li><a href="dashboard.php" class="block py-2 hover:bg-gray-100 rounded transition">Dashboard</a></li>
     <li><a href="index.php" class="block py-2 hover:bg-gray-100 rounded transition">Subscriptions</a></li>
     <li><a href="insight.php" class="block py-2 hover:bg-gray-100 rounded transition">Insight</a></li>
-    <li><a href="recommendations.php" class="block py-2 hover:bg-gray-100 rounded transition">Recommendations</a></li>
     <li class="border-t border-gray-200 pt-4 mt-4"></li>
     <li><a href="profile.php" class="block py-2 hover:bg-gray-100 rounded transition">Profile</a></li>
+    <li><a href="set_reminder.php" class="block py-2 hover:bg-gray-100 rounded transition">Reminders</a></li>
     <li><a href="logout.php" class="block py-2 text-red-600 hover:bg-red-50 rounded transition">Logout</a></li>
   </ul>
 </div>

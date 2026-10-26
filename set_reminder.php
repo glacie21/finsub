@@ -1,59 +1,65 @@
 <?php
 // set_reminder.php
+include 'auth.php';
+include 'config.php';
 
-// Pastikan sesi dimulai
-if (session_status() == PHP_SESSION_NONE) {
-    session_start();
-}
-
-// Pastikan pengguna sudah login
-if (!isset($_SESSION['user_id'])) {
-    header("Location: login.php"); // Arahkan ke halaman login jika belum login
-    exit();
-}
-
-// Sertakan file koneksi database Anda
-require_once 'db_connection.php'; // Sesuaikan dengan path file koneksi database Anda
-
-$user_id = $_SESSION['user_id'];
+$user_id = (int) $_SESSION['user_id'];
 $message = '';
 $error = '';
+$allowed_days = [0, 1, 3, 5, 7, 14, 30];
 
 // --- Logika untuk menyimpan pengaturan pengingat ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_reminder_settings'])) {
-    foreach ($_POST['subscription_id'] as $sub_id) {
-        $reminder_enabled = isset($_POST['reminder_enabled'][$sub_id]) ? 1 : 0;
-        $reminder_days_before = isset($_POST['reminder_days_before'][$sub_id]) ? intval($_POST['reminder_days_before'][$sub_id]) : 0;
+    $stmt = mysqli_prepare($conn, "UPDATE subscriptions SET reminder_enabled = ?, reminder_days_before = ? WHERE id = ? AND user_id = ?");
 
-        try {
-            // Update atau insert pengaturan pengingat ke database
-            // Asumsi ada tabel 'subscription_reminders' atau kolom di tabel 'subscriptions'
-            // Contoh ini mengasumsikan kolom 'reminder_enabled' dan 'reminder_days_before' di tabel 'subscriptions'
+    if ($stmt) {
+        foreach ((array) ($_POST['subscription_id'] ?? []) as $sub_id) {
+            $sub_id = (int) $sub_id;
+            $reminder_enabled = isset($_POST['reminder_enabled'][$sub_id]) ? 1 : 0;
+            $reminder_days_before = (int) ($_POST['reminder_days_before'][$sub_id] ?? 0);
 
-            $stmt = $pdo->prepare("UPDATE subscriptions SET reminder_enabled = ?, reminder_days_before = ? WHERE id = ? AND user_id = ?");
-            $stmt->execute([$reminder_enabled, $reminder_days_before, $sub_id, $user_id]);
+            if (!in_array($reminder_days_before, $allowed_days, true)) {
+                $reminder_days_before = 0;
+            }
 
-            $message = "Pengaturan pengingat berhasil disimpan!";
-
-        } catch (PDOException $e) {
-            $error = "Gagal menyimpan pengaturan pengingat: " . $e->getMessage();
-            break; // Hentikan loop jika ada error
+            // Hanya langganan milik user yang sedang login yang ikut terupdate
+            mysqli_stmt_bind_param($stmt, "iiii", $reminder_enabled, $reminder_days_before, $sub_id, $user_id);
+            if (!mysqli_stmt_execute($stmt)) {
+                error_log("Error saving reminder: " . mysqli_stmt_error($stmt));
+                $error = "Gagal menyimpan pengaturan pengingat.";
+                break; // Hentikan loop jika ada error
+            }
         }
+        mysqli_stmt_close($stmt);
+
+        if (!$error) {
+            $message = "Pengaturan pengingat berhasil disimpan!";
+        }
+    } else {
+        error_log("Error preparing reminder update: " . mysqli_error($conn));
+        $error = "Gagal menyimpan pengaturan pengingat.";
     }
 }
 
-// --- Ambil data langganan pengguna dari database ---
+// --- Ambil data langganan aktif pengguna dari database ---
 $subscriptions = [];
-try {
-    $stmt = $pdo->prepare("SELECT id, name, next_due_date, reminder_enabled, reminder_days_before FROM subscriptions WHERE user_id = ? ORDER BY next_due_date ASC");
-    $stmt->execute([$user_id]);
-    $subscriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {
-    $error = "Gagal memuat langganan: " . $e->getMessage();
-}
+$stmt = mysqli_prepare($conn, "
+    SELECT s.id, a.name, s.next_payment_date, s.reminder_enabled, s.reminder_days_before
+    FROM subscriptions s
+    JOIN apps a ON s.app_id = a.id
+    WHERE s.user_id = ? AND s.status = 'Active'
+    ORDER BY s.next_payment_date ASC
+");
 
-// Sertakan navbar
-include_once 'navbar.php';
+if ($stmt) {
+    mysqli_stmt_bind_param($stmt, "i", $user_id);
+    mysqli_stmt_execute($stmt);
+    $subscriptions = mysqli_fetch_all(mysqli_stmt_get_result($stmt), MYSQLI_ASSOC);
+    mysqli_stmt_close($stmt);
+} else {
+    error_log("Error loading subscriptions for reminders: " . mysqli_error($conn));
+    $error = "Gagal memuat langganan.";
+}
 ?>
 
 <!DOCTYPE html>
@@ -61,14 +67,16 @@ include_once 'navbar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Set Reminder - FinSub</title>
+    <title>Set Reminder | FinSub</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 </head>
 <body class="bg-gray-100 min-h-screen flex flex-col">
 
+    <?php include 'templates/navbar.php'; ?>
+
     <main class="flex-grow container mx-auto px-4 py-8">
-        <h2 class="text-3xl font-bold text-gray-800 mb-6">Pengaturan Pengingat Langganan</h2>
+        <h2 class="text-3xl font-bold text-gray-800 mb-2">Pengaturan Pengingat Langganan</h2>
+        <p class="text-gray-600 mb-6">Pengingat akan muncul di ikon lonceng notifikasi sesuai jumlah hari sebelum jatuh tempo yang Anda pilih.</p>
 
         <?php if ($message): ?>
             <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded relative mb-4" role="alert">
@@ -84,7 +92,7 @@ include_once 'navbar.php';
 
         <?php if (empty($subscriptions)): ?>
             <div class="bg-white p-6 rounded-lg shadow-md text-center">
-                <p class="text-gray-600">Anda belum memiliki langganan yang terdaftar. Tambahkan langganan terlebih dahulu untuk mengatur pengingat.</p>
+                <p class="text-gray-600">Anda belum memiliki langganan aktif. Tambahkan langganan terlebih dahulu untuk mengatur pengingat.</p>
                 <a href="index.php" class="mt-4 inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition">Tambahkan Langganan</a>
             </div>
         <?php else: ?>
@@ -114,7 +122,7 @@ include_once 'navbar.php';
                                         <?= htmlspecialchars($sub['name']) ?>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                        <?= htmlspecialchars($sub['next_due_date']) ?>
+                                        <?= date('j F Y', strtotime($sub['next_payment_date'])) ?>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                         <input type="hidden" name="subscription_id[]" value="<?= $sub['id'] ?>">
@@ -125,7 +133,7 @@ include_once 'navbar.php';
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                         <select name="reminder_days_before[<?= $sub['id'] ?>]"
                                                 class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md">
-                                            <?php foreach ([0, 1, 3, 5, 7, 14, 30] as $days): ?>
+                                            <?php foreach ($allowed_days as $days): ?>
                                                 <option value="<?= $days ?>" <?= ($sub['reminder_days_before'] == $days) ? 'selected' : '' ?>>
                                                     <?php
                                                     if ($days == 0) {

@@ -18,7 +18,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['username'], $_POST['pa
     // Login success
     $_SESSION['user_id'] = $user['id'];
     $_SESSION['username'] = $user['username'];
-    header("Location: Homepage.php"); // Redirect to dashboard
+    header("Location: homepage.php"); // Redirect to homepage
     exit;
   } else {
     $error = "Incorrect username or password.";

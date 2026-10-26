@@ -1,16 +1,20 @@
 <?php
 include 'auth.php';
 include 'config.php';
+include 'functions.php';
 
 $user_id = $_SESSION['user_id'];
+
+// Perpanjang otomatis langganan yang sudah jatuh tempo sebelum menghitung ringkasan
+renew_due_subscriptions($conn, $user_id);
 
 $query_summary = mysqli_prepare($conn, "
   SELECT
     SUM(CASE WHEN s.status='Active' THEN 1 ELSE 0 END) as active_total,
     SUM(CASE WHEN s.status='Active' THEN
         CASE
-            WHEN s.payment_method = 'Monthly' THEN COALESCE(s.user_monthly_price, a.monthly_price)
-            WHEN s.payment_method = 'Yearly' THEN COALESCE(s.user_yearly_price, a.yearly_price) / 12
+            WHEN s.billing_cycle = 'Monthly' THEN COALESCE(s.user_monthly_price, a.monthly_price)
+            WHEN s.billing_cycle = 'Yearly' THEN COALESCE(s.user_yearly_price, a.yearly_price) / 12
             ELSE 0
         END
     ELSE 0 END) as month_spending
@@ -40,7 +44,7 @@ mysqli_stmt_execute($stmt_subs);
 $result_subs = mysqli_stmt_get_result($stmt_subs);
 
 $stmt_upcoming = mysqli_prepare($conn, "
-  SELECT s.*, a.name, a.monthly_price AS default_monthly_price, a.yearly_price AS default_yearly_price, s.next_payment_date, s.payment_method
+  SELECT s.*, a.name, a.monthly_price AS default_monthly_price, a.yearly_price AS default_yearly_price, s.next_payment_date, s.billing_cycle
   FROM subscriptions s
   JOIN apps a ON s.app_id = a.id
   WHERE s.user_id = ? AND s.status = 'Active'
@@ -130,7 +134,7 @@ $next = mysqli_fetch_assoc($upcoming_result);
         <tbody>
           <?php if (mysqli_num_rows($result_subs) > 0) { while($row = mysqli_fetch_assoc($result_subs)) {
             // Determine the price: prioritize user-defined price, else use default app price
-            $current_price = ($row['payment_method'] == 'Monthly')
+            $current_price = ($row['billing_cycle'] == 'Monthly')
                              ? ($row['user_monthly_price'] !== NULL ? $row['user_monthly_price'] : $row['default_monthly_price'])
                              : ($row['user_yearly_price'] !== NULL ? $row['user_yearly_price'] : $row['default_yearly_price']);
             ?>
@@ -150,8 +154,8 @@ $next = mysqli_fetch_assoc($upcoming_result);
             <td class="p-4">$<?= number_format($current_price, 2) ?></td>
             <td class="p-4">
               <span class="inline-block px-3 py-1 rounded-full text-xs font-medium billing-cycle
-                <?= $row['payment_method'] == 'Monthly' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700' ?>">
-                <?= htmlspecialchars($row['payment_method']) ?>
+                <?= $row['billing_cycle'] == 'Monthly' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700' ?>">
+                <?= htmlspecialchars($row['billing_cycle']) ?>
               </span>
             </td>
             <td class="p-4"><?= date('j F', strtotime($row['next_payment_date'])) ?></td>
@@ -176,7 +180,7 @@ $next = mysqli_fetch_assoc($upcoming_result);
 
   <?php if ($next) {
     // Determine the price for the upcoming notification: prioritize user-defined price, else use default app price
-    $next_price = ($next['payment_method'] == 'Monthly')
+    $next_price = ($next['billing_cycle'] == 'Monthly')
                   ? ($next['user_monthly_price'] !== NULL ? $next['user_monthly_price'] : $next['default_monthly_price'])
                   : ($next['user_yearly_price'] !== NULL ? $next['user_yearly_price'] : $next['default_yearly_price']);
     ?>
