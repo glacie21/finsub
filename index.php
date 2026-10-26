@@ -52,7 +52,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['edit_id'], $_POST['edi
 
     // Prepare and execute the UPDATE statement for the subscription.
     // MODIFIED: Include user_monthly_price and user_yearly_price in the update
-    $stmt = mysqli_prepare($conn, "UPDATE subscriptions SET billing_cycle = ?, next_payment_date = ?, status = 'Active', user_monthly_price = ?, user_yearly_price = ? WHERE id = ? AND user_id = ?");
+    // auto_renew harus di-assign sebelum status: MySQL mengevaluasi SET dari kiri ke kanan, jadi IF() masih membaca status lama.
+    // Langganan Inactive yang diaktifkan kembali otomatis diperpanjang lagi; edit pada langganan yang sudah di-cancel tidak membatalkan cancel-nya.
+    $stmt = mysqli_prepare($conn, "UPDATE subscriptions SET auto_renew = IF(status = 'Inactive', 1, auto_renew), billing_cycle = ?, next_payment_date = ?, status = 'Active', user_monthly_price = ?, user_yearly_price = ? WHERE id = ? AND user_id = ?");
     if ($stmt) {
         mysqli_stmt_bind_param($stmt, "ssddii", $billing_cycle, $next_payment_date, $user_monthly_price, $user_yearly_price, $id, $user_id);
         if (!mysqli_stmt_execute($stmt)) {
@@ -369,7 +371,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['app_id'], $_POST['bill
                   ? '<path d="M16 2L6 12l-4-4 1.5-1.5L6 9l8.5-8.5L16 2z"/>'
                   : '<circle cx="8" cy="8" r="3"/>'; ?>
               </svg>
-              <?= htmlspecialchars($row['status']) ?>
+              <?= htmlspecialchars($row['status']) ?><?= ($row['status'] == 'Active' && !$row['auto_renew']) ? ' · Cancelled' : '' ?>
             </span>
           </td>
 

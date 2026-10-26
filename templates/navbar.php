@@ -19,7 +19,7 @@ if ($user_id && isset($conn)) { // Hanya jalankan query jika user_id dan koneksi
     // Query untuk mendapatkan langganan aktif yang pengingatnya menyala dan jatuh tempo
     // dalam rentang hari yang diatur user di set_reminder.php (default 30 hari)
     $stmt_upcoming_subs = mysqli_prepare($conn, "
-        SELECT s.id, a.name AS app_name, s.next_payment_date, s.billing_cycle
+        SELECT s.id, a.name AS app_name, s.next_payment_date, s.billing_cycle, s.auto_renew
         FROM subscriptions s
         JOIN apps a ON s.app_id = a.id
         WHERE s.user_id = ?
@@ -58,6 +58,7 @@ if ($user_id && isset($conn)) { // Hanya jalankan query jika user_id dan koneksi
     <li><a href="dashboard.php" class="hover:text-blue-600 transition">Dashboard</a></li>
     <li><a href="index.php" class="hover:text-blue-600 transition">Subscriptions</a></li>
     <li><a href="insight.php" class="hover:text-blue-600 transition">Insight</a></li>
+    <li><a href="recommendations.php" class="hover:text-blue-600 transition">Recommendations</a></li>
   </ul>
 
   <div class="hidden md:flex items-center space-x-4 relative">
@@ -82,7 +83,7 @@ if ($user_id && isset($conn)) { // Hanya jalankan query jika user_id dan koneksi
                         <div class="ml-1">
                             <span class="font-semibold"><?= htmlspecialchars($sub['app_name']) ?></span>
                             <p class="text-xs text-gray-500">
-                                Due: <?= date('M j, Y', strtotime($sub['next_payment_date'])) ?> (<?= htmlspecialchars($sub['billing_cycle']) ?>)
+                                <?= $sub['auto_renew'] ? 'Due' : 'Ends' ?>: <?= date('M j, Y', strtotime($sub['next_payment_date'])) ?> (<?= htmlspecialchars($sub['billing_cycle']) ?>)
                             </p>
                         </div>
                     </a>
@@ -126,6 +127,7 @@ if ($user_id && isset($conn)) { // Hanya jalankan query jika user_id dan koneksi
     <li><a href="dashboard.php" class="block py-2 hover:bg-gray-100 rounded transition">Dashboard</a></li>
     <li><a href="index.php" class="block py-2 hover:bg-gray-100 rounded transition">Subscriptions</a></li>
     <li><a href="insight.php" class="block py-2 hover:bg-gray-100 rounded transition">Insight</a></li>
+    <li><a href="recommendations.php" class="block py-2 hover:bg-gray-100 rounded transition">Recommendations</a></li>
     <li class="border-t border-gray-200 pt-4 mt-4"></li>
     <li><a href="profile.php" class="block py-2 hover:bg-gray-100 rounded transition">Profile</a></li>
     <li><a href="set_reminder.php" class="block py-2 hover:bg-gray-100 rounded transition">Reminders</a></li>

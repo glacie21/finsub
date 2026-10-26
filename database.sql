@@ -107,6 +107,10 @@ ALTER TABLE subscriptions
 ADD COLUMN reminder_enabled TINYINT(1) NOT NULL DEFAULT 1,
 ADD COLUMN reminder_days_before INT NOT NULL DEFAULT 30;
 
+-- Perpanjangan otomatis: 0 = dibatalkan user, langganan berakhir (Inactive) di next_payment_date
+ALTER TABLE subscriptions
+ADD COLUMN auto_renew TINYINT(1) NOT NULL DEFAULT 1;
+
 -- New table for tracking spending logs
 CREATE TABLE IF NOT EXISTS spending_logs (
     id INT AUTO_INCREMENT PRIMARY KEY,

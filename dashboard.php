@@ -17,7 +17,14 @@ $query_summary = mysqli_prepare($conn, "
             WHEN s.billing_cycle = 'Yearly' THEN COALESCE(s.user_yearly_price, a.yearly_price) / 12
             ELSE 0
         END
-    ELSE 0 END) as month_spending
+    ELSE 0 END) as month_spending,
+    SUM(CASE WHEN s.status='Active' AND s.auto_renew = 1 THEN
+        CASE
+            WHEN s.billing_cycle = 'Monthly' THEN COALESCE(s.user_monthly_price, a.monthly_price)
+            WHEN s.billing_cycle = 'Yearly' THEN COALESCE(s.user_yearly_price, a.yearly_price) / 12
+            ELSE 0
+        END
+    ELSE 0 END) as next_month_estimate
   FROM subscriptions s
   JOIN apps a ON s.app_id = a.id
   WHERE s.user_id = ?
@@ -29,7 +36,7 @@ $summary = mysqli_fetch_assoc($summary_result);
 
 $active = $summary['active_total'] ?? 0;
 $month_spending = $summary['month_spending'] ?? 0;
-$next_month_estimate = $month_spending; // Assuming next month's estimate is based on current active subs
+$next_month_estimate = $summary['next_month_estimate'] ?? 0; // Langganan yang sudah di-cancel tidak dihitung
 
 $stmt_subs = mysqli_prepare($conn, "
   SELECT s.*, a.name, a.monthly_price AS default_monthly_price, a.yearly_price AS default_yearly_price, s.next_payment_date, s.status, c.name AS category_name
@@ -47,7 +54,7 @@ $stmt_upcoming = mysqli_prepare($conn, "
   SELECT s.*, a.name, a.monthly_price AS default_monthly_price, a.yearly_price AS default_yearly_price, s.next_payment_date, s.billing_cycle
   FROM subscriptions s
   JOIN apps a ON s.app_id = a.id
-  WHERE s.user_id = ? AND s.status = 'Active'
+  WHERE s.user_id = ? AND s.status = 'Active' AND s.auto_renew = 1
   ORDER BY s.next_payment_date ASC
   LIMIT 1
 ");
@@ -161,7 +168,7 @@ $next = mysqli_fetch_assoc($upcoming_result);
             <td class="p-4"><?= date('j F', strtotime($row['next_payment_date'])) ?></td>
             <td class="p-4">
               <span class="px-2 py-1 rounded-full text-xs <?= $row['status']=='Active' ? 'bg-green-100 text-green-800' : 'bg-gray-200 text-gray-600' ?>">
-                <?= htmlspecialchars($row['status']) ?>
+                <?= htmlspecialchars($row['status']) ?><?= ($row['status'] == 'Active' && !$row['auto_renew']) ? ' · Cancelled' : '' ?>
               </span>
             </td>
             <td class="p-4">
