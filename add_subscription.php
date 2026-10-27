@@ -86,6 +86,7 @@ mysqli_close($conn);
   <section class="container mx-auto mt-10 p-6 bg-white rounded-lg shadow-md">
     <h2 class="text-2xl font-bold text-gray-800 mb-6 text-center">Add New Subscription</h2>
       <form action="add_subscription.php" method="POST" class="space-y-4">
+        <?= csrf_field() ?>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-2">Select Application</label>
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

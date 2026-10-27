@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS usage_tracking (
     subscription_id INT NOT NULL,
     user_id INT NOT NULL,
     usage_date DATE NOT NULL,
-    hours_used DECIMAL(4,2) NOT NULL,
+    hours_used DECIMAL(5,2) NOT NULL, -- Maks 999.99 jam (validasi aplikasi: 0-744 jam per bulan)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY unique_usage (subscription_id, user_id, usage_date),
