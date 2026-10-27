@@ -1,6 +1,6 @@
 <?php
 include 'config.php'; // Includes database connection
-session_start();
+require_once 'session.php';
 // No database connection needed for a static homepage
 // include 'config.php'; // Uncomment if you need DB connection for dynamic content on homepage
 ?>

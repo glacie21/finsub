@@ -5,10 +5,6 @@
 include 'config.php';
 include 'auth.php';
 include 'functions.php';
-// Make sure the session is started to get the user_id
-if (session_status() == PHP_SESSION_NONE) {
-    session_start();
-}
 
 $user_id = $_SESSION['user_id'] ?? null;
 
@@ -30,9 +26,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['usage_hours'], $_POST[
     // menjadi satu baris per bulan dan update berikutnya menimpa nilai bulan yang sama
     $usage_date = date('Y-m-01');
 
-    // Debug: Check if we receive the data correctly
-    error_log("DEBUG: Received usage data - subscription_id: $subscription_id, user_id: $user_id, usage_hours: $usage_hours, usage_date: $usage_date");
-
     // Validate input
     if ($usage_hours < 0 || $usage_hours > 744) { // Max hours in a month (31 days * 24 hours)
         echo json_encode(['success' => false, 'error' => 'Hours must be between 0 and 744 (approx. max hours in a month).']);
@@ -53,38 +46,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['usage_hours'], $_POST[
         }
         mysqli_stmt_close($verify_stmt);
     } else {
-        echo json_encode(['success' => false, 'error' => 'Database error preparing verification: ' . mysqli_error($conn)]);
+        error_log("Error preparing usage verification: " . mysqli_error($conn));
+        echo json_encode(['success' => false, 'error' => 'Terjadi kesalahan pada sistem.']);
         exit;
     }
 
-    // Check if table exists and has correct structure
-    $table_check = mysqli_query($conn, "SHOW TABLES LIKE 'usage_tracking'");
-    if (mysqli_num_rows($table_check) == 0) {
-        // Create table if it doesn't exist
-        $create_table = "
-            CREATE TABLE usage_tracking (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                subscription_id INT NOT NULL,
-                user_id INT NOT NULL,
-                usage_date DATE NOT NULL,
-                hours_used DECIMAL(4,2) NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                UNIQUE KEY unique_monthly_usage (subscription_id, user_id, YEAR(usage_date), MONTH(usage_date)),
-                FOREIGN KEY (subscription_id) REFERENCES subscriptions(id) ON DELETE CASCADE,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-        ";
-
-        if (mysqli_query($conn, $create_table)) {
-            error_log("DEBUG: Created usage_tracking table");
-        } else {
-            echo json_encode(['success' => false, 'error' => 'Failed to create usage_tracking table: ' . mysqli_error($conn)]);
-            exit;
-        }
-    }
-
-    // Try to insert or update usage data
+    // Simpan atau perbarui pemakaian bulan ini (tabel usage_tracking dibuat lewat database.sql / migrations)
     $stmt_usage = mysqli_prepare($conn, "
         INSERT INTO usage_tracking (subscription_id, user_id, usage_date, hours_used)
         VALUES (?, ?, ?, ?)
@@ -95,24 +62,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['usage_hours'], $_POST[
         mysqli_stmt_bind_param($stmt_usage, "iisd", $subscription_id, $user_id, $usage_date, $usage_hours);
 
         if (mysqli_stmt_execute($stmt_usage)) {
-            $affected_rows = mysqli_stmt_affected_rows($stmt_usage);
-            error_log("DEBUG: Usage data saved successfully. Affected rows: $affected_rows");
-            echo json_encode([
-                'success' => true,
-                'message' => 'Usage data saved successfully',
-                'affected_rows' => $affected_rows
-            ]);
+            echo json_encode(['success' => true, 'message' => 'Usage data saved successfully']);
         } else {
-            $error = mysqli_stmt_error($stmt_usage);
-            error_log("DEBUG: Execute error: $error");
-            echo json_encode(['success' => false, 'error' => "Execute error: $error"]);
+            error_log("Error saving usage: " . mysqli_stmt_error($stmt_usage));
+            echo json_encode(['success' => false, 'error' => 'Gagal menyimpan data pemakaian.']);
         }
         mysqli_stmt_close($stmt_usage);
     } else {
-        $error = mysqli_error($conn);
-        error_log("DEBUG: Prepare error: $error");
-        // KESALAHAN SINTAKS DULU ADA DI SINI. TANDA KURUNG SIKU TAMBAHAN PADA 'success']
-        echo json_encode(['success' => false, 'error' => "Prepare error: $error"]);
+        error_log("Error preparing usage insert: " . mysqli_error($conn));
+        echo json_encode(['success' => false, 'error' => 'Terjadi kesalahan pada sistem.']);
     }
     exit; // Important: stop execution here
 }
@@ -243,7 +201,6 @@ if ($stmt) {
     exit;
 }
 
-// ************* MODIFIKASI DIMULAI DI SINI (Revisi untuk Line Chart dan Dummy Data) *************
 
 // Fetch usage data for the current month
 $current_year = date('Y');
@@ -325,7 +282,6 @@ for ($i = $num_months - 1; $i >= 0; $i--) {
 }
 
 
-// ************* MODIFIKASI BERAKHIR DI SINI *************
 
 
 // Determine the correct price based on the payment method
@@ -465,6 +421,7 @@ if ($has_this_month_usage) {
                 </button>
                 <?php if ($is_cancelled): ?>
                 <form action="set_auto_renew.php" method="POST">
+                    <?= csrf_field() ?>
                     <input type="hidden" name="id" value="<?= $data['id'] ?>">
                     <input type="hidden" name="auto_renew" value="1">
                     <button type="submit" class="bg-green-600 text-white px-5 py-2 rounded-lg hover:bg-green-700 text-sm font-medium transition-colors duration-200 shadow-md">
@@ -473,6 +430,7 @@ if ($has_this_month_usage) {
                 </form>
                 <?php elseif ($data['status'] == 'Active'): ?>
                 <form action="set_auto_renew.php" method="POST" onsubmit="return confirm('Cancel this subscription? It stays active until <?= date('M j, Y', strtotime($data['next_payment_date'])) ?> and will not be charged again.')">
+                    <?= csrf_field() ?>
                     <input type="hidden" name="id" value="<?= $data['id'] ?>">
                     <input type="hidden" name="auto_renew" value="0">
                     <button type="submit" class="bg-gray-600 text-white px-5 py-2 rounded-lg hover:bg-gray-700 text-sm font-medium transition-colors duration-200 shadow-md">
@@ -481,6 +439,7 @@ if ($has_this_month_usage) {
                 </form>
                 <?php endif; ?>
                 <form action="delete_subscription.php" method="POST" onsubmit="return confirm('Are you sure you want to delete this subscription?')">
+                    <?= csrf_field() ?>
                     <input type="hidden" name="id" value="<?= $data['id'] ?>">
                     <button type="submit" class="bg-red-600 text-white px-5 py-2 rounded-lg hover:bg-red-700 text-sm font-medium transition-colors duration-200 shadow-md">
                         Delete Subscription
@@ -611,6 +570,7 @@ if ($has_this_month_usage) {
             <h3 class="text-xl font-bold mb-5 text-gray-800">Edit Subscription</h3>
 
             <form method="POST" action="">
+                <?= csrf_field() ?>
                 <input type="hidden" id="edit_id" name="edit_id">
 
                 <div class="mb-4">
@@ -672,6 +632,7 @@ if ($has_this_month_usage) {
     <div id="usageModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
         <div class="bg-white p-6 rounded-lg shadow-lg w-96 max-w-md mx-4">
             <h3 class="text-xl font-bold mb-5 text-gray-800">Record Usage for This Month</h3> <form id="usageForm">
+                <?= csrf_field() ?>
                 <input type="hidden" id="usage_subscription_id" name="subscription_id" value="<?= $data['id'] ?>">
 
                 <div class="mb-4">
@@ -865,20 +826,12 @@ if ($has_this_month_usage) {
 
             const formData = new FormData(this);
 
-            // Debug: Log what we're sending
-            console.log('Sending data:', {
-                subscription_id: formData.get('subscription_id'),
-                usage_hours: formData.get('usage_hours')
-            });
-
             fetch(window.location.href, {
                 method: 'POST',
+                headers: { 'Accept': 'application/json' }, // Agar error CSRF juga dikirim sebagai JSON
                 body: formData
             })
             .then(response => {
-                console.log('Response status:', response.status);
-                console.log('Response headers:', response.headers);
-
                 // Check if response is JSON
                 const contentType = response.headers.get('content-type');
                 if (!contentType || !contentType.includes('application/json')) {
@@ -892,8 +845,6 @@ if ($has_this_month_usage) {
                 return response.json(); // Now safely parse as JSON
             })
             .then(data => {
-                console.log('Parsed data:', data);
-
                 submitButton.disabled = false;
                 submitButton.textContent = originalText;
 
