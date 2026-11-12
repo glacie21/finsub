@@ -97,6 +97,7 @@ if ($stmt) {
             </div>
         <?php else: ?>
             <form action="set_reminder.php" method="POST" class="bg-white p-6 rounded-lg shadow-md">
+              <?= csrf_field() ?>
                 <div class="overflow-x-auto">
                     <table class="min-w-full divide-y divide-gray-200">
                         <thead class="bg-gray-50">

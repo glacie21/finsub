@@ -1,5 +1,5 @@
 <?php
-session_start();
+require_once 'session.php';
 include 'config.php';
 
 // Handle POST login
@@ -15,7 +15,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['username'], $_POST['pa
   $user = mysqli_fetch_assoc($result);
 
   if ($user && password_verify($password, $user['password'])) {
-    // Login success
+    // Login success: ganti session id & token CSRF agar session lama tidak bisa dipakai ulang (session fixation)
+    session_regenerate_id(true);
+    unset($_SESSION['csrf_token']);
     $_SESSION['user_id'] = $user['id'];
     $_SESSION['username'] = $user['username'];
     header("Location: homepage.php"); // Redirect to homepage
@@ -55,6 +57,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['username'], $_POST['pa
     <?php } ?>
 
     <form method="POST" class="space-y-5">
+      <?= csrf_field() ?>
       <div>
         <label for="username" class="block mb-2 text-sm font-semibold text-gray-700">Username</label>
         <input type="text" name="username" id="username" required

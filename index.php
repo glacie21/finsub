@@ -386,6 +386,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['app_id'], $_POST['bill
             <form action="delete_subscription.php" method="POST"
                   onclick="event.stopPropagation();"
                   onsubmit="return confirm('Are you sure you want to delete this subscription?')">
+              <?= csrf_field() ?>
               <input type="hidden" name="id" value="<?= $row['id'] ?>">
               <button type="submit"
                       class="flex items-center gap-1 bg-red-500 text-white px-3 py-1 rounded text-xs hover:bg-red-600 transition-colors duration-200">
@@ -723,6 +724,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['app_id'], $_POST['bill
       <h3 class="text-xl font-bold mb-5 text-gray-800">Add Subscription</h3>
       
       <form method="POST" action="">
+        <?= csrf_field() ?>
         <div class="mb-4">
           <label class="block text-sm font-semibold text-gray-700 mb-2">Select Application</label>
           <div class="space-y-2 max-h-48 overflow-y-auto border border-gray-300 rounded-lg p-3">
@@ -792,6 +794,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['app_id'], $_POST['bill
       <h3 class="text-xl font-bold mb-5 text-gray-800">Edit Subscription</h3>
       
       <form method="POST" action="">
+        <?= csrf_field() ?>
         <input type="hidden" id="edit_id" name="edit_id">
         
         <div class="mb-4">

@@ -73,6 +73,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
       <h1 class="text-2xl font-bold text-center text-blue-600">Edit Subscription</h1>
 
       <form method="POST" class="space-y-4">
+        <?= csrf_field() ?>
         <!-- App Name -->
         <div>
           <label class="block mb-1 text-sm font-medium">App Name</label>

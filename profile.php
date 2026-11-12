@@ -115,6 +115,7 @@ if (isset($_SESSION['profile_error'])) {
   <div class="bg-white rounded-xl w-full max-w-md p-6 space-y-5 shadow-lg">
     <h2 class="text-2xl font-bold text-gray-800 mb-4">Change Username</h2>
     <form method="POST" action="update_profile.php" class="space-y-4">
+      <?= csrf_field() ?>
       <input type="hidden" name="type" value="username">
       <div>
         <label for="new_username" class="block text-sm font-medium text-gray-700 mb-1">New Username</label>
@@ -132,6 +133,7 @@ if (isset($_SESSION['profile_error'])) {
   <div class="bg-white rounded-xl w-full max-w-md p-6 space-y-5 shadow-lg">
     <h2 class="text-2xl font-bold text-gray-800 mb-4">Change Password</h2>
     <form method="POST" action="update_profile.php" class="space-y-4" onsubmit="return validatePasswordChange()">
+      <?= csrf_field() ?>
       <input type="hidden" name="type" value="password">
       <div>
         <label for="current_password" class="block text-sm font-medium text-gray-700 mb-1">Current Password</label>

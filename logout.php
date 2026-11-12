@@ -1,5 +1,5 @@
 <?php
-session_start(); // Mulai session
+require_once 'session.php'; // Mulai session
 
 session_unset(); // Hapus semua variable session
 session_destroy(); // Hancurkan session

@@ -1,5 +1,5 @@
 <?php
-session_start();
+require_once 'session.php';
 include 'config.php';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['username'], $_POST['email'], $_POST['password'])) {
@@ -68,6 +68,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['username'], $_POST['em
     <?php } ?>
 
     <form method="POST" class="space-y-5" onsubmit="return validateRegisterForm()">
+      <?= csrf_field() ?>
       <div>
         <label for="username" class="block mb-2 text-sm font-semibold text-gray-700">Username</label>
         <input type="text" name="username" id="username" required
